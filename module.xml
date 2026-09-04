@@ -8,7 +8,9 @@
       <Packaging>module</Packaging>
       <SourcesRoot>src</SourcesRoot>
       <Resource Name="dc.sample.PKG"/>
+      <Resource Name="dc.omniEmbedding.PKG"/>
       <UnitTest Name="/tests" Package="dc.sample.unittests" Phase="test"/>
+      <UnitTest Name="/tests/dc/omniEmbedding" Package="dc.omniEmbedding.tests" Phase="test"/>
 
     </Module>
   </Document>
