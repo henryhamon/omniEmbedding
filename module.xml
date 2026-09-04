@@ -1,17 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Export generator="Cache" version="25">
-  <Document name="dc-sample.ZPM">
+  <Document name="dc-omni-embedding.ZPM">
     <Module>
-      <Name>dc-sample</Name>
-      <Version>2.0.13</Version>
+      <Name>dc-omni-embedding</Name>
+      <Version>0.1.0</Version>
       <Description>Basic InterSystems IRIS Development Template</Description>
       <Packaging>module</Packaging>
       <SourcesRoot>src</SourcesRoot>
-      <Resource Name="dc.sample.PKG"/>
       <Resource Name="dc.omniEmbedding.PKG"/>
-      <UnitTest Name="/tests" Package="dc.sample.unittests" Phase="test"/>
       <UnitTest Name="/tests/dc/omniEmbedding" Package="dc.omniEmbedding.tests" Phase="test"/>
-
     </Module>
   </Document>
 </Export>
