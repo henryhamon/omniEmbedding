@@ -2,7 +2,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat&logo=AdGuard)](LICENSE)
 [![InterSystems IRIS](https://img.shields.io/badge/InterSystems-IRIS%202026%2B-blue.svg)](https://www.intersystems.com/)
 [![ObjectScript](https://img.shields.io/badge/ObjectScript-native-informational.svg)](https://docs.intersystems.com/)
-[![Embedded Python](https://img.shields.io/badge/Embedded%20Python-optional-yellow.svg)](https://docs.intersystems.com/)
 
 ![OmniEmbedding Logo](./assets/omni-logo.png)
 
