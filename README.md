@@ -23,6 +23,8 @@ InterSystems IRIS 2026 ships a native embeddings runtime — `%Embedding.Interfa
 - **Cohere** returns embeddings under `embeddings.float[0]`
 - **Gemini** authenticates via `?key=` on the URL itself
 - **Mistral** is OpenAI-shaped but adds `output_dimension` / `output_dtype` for Codestral truncation
+- **Voyage AI** adds `input_type` (`query` vs `document`), truncation and int8/binary quantization
+- **Jina AI** requires `input` as an array (even for one text) and exposes `task` + `late_chunking` for coherent long-doc chunks
 
 Swapping providers usually means rewriting glue code, and mixing them in fallback flows silently mixes vector spaces — a data-integrity disaster that only surfaces months later, when your similarity searches start returning nonsense.
 
@@ -30,7 +32,7 @@ Swapping providers usually means rewriting glue code, and mixing them in fallbac
 
 Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')` call — from SQL, from ObjectScript, from Interoperability — routes to the right provider, retries transient errors, opens a circuit breaker on failing providers, and **refuses** to fall back to a config whose vector space differs from the primary.
 
-- ✅ **Six providers, one interface:** Ollama · OpenAI · Azure OpenAI · Cohere · Gemini · Mistral (text + code)
+- ✅ **Eight providers, one interface:** Ollama · OpenAI · Azure OpenAI · Cohere · Gemini · Mistral (text + code) · Voyage (text + code + domain) · Jina (with `late_chunking`)
 - ✅ **Native HTTP:** `%Net.HttpRequest` — no Python required on the hot path
 - ✅ **Resilient:** exponential backoff, `Retry-After` honored, circuit breaker per provider
 - ✅ **Safe fallback:** vector-space invariance is enforced *before* any HTTP call
@@ -41,7 +43,7 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
 
 ## 🛠️ How It Works
 
-`dc.omniEmbedding` sits between IRIS's native embedding runtime and any of the six supported external providers, applying three architectural pillars:
+`dc.omniEmbedding` sits between IRIS's native embedding runtime and any of the eight supported external providers, applying three architectural pillars:
 
 1. **HTTP native first** — the happy path uses `%Net.HttpRequest` end-to-end; Embedded Python is opt-in only (for accurate `tiktoken` token counts).
 2. **Polymorphism by class hierarchy** — a Template Method in `provider.Base` fixes the sequence `ValidateConfig → SetAuth → GetEmbeddingsUrl → BuildPayload → RetryWithBackoff → ParseResponse`; each provider overrides only what differs.
@@ -61,6 +63,8 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
 | `dc.omniEmbedding.provider.Cohere` | `v2/embed`, nested `embeddings.float[0]` |
 | `dc.omniEmbedding.provider.Gemini` | Auth via `?key=`, `content.parts[].text` payload |
 | `dc.omniEmbedding.provider.Mistral` | `api.mistral.ai/v1/embeddings`, text (`mistral-embed`) + code (`codestral-embed`), optional `output_dimension` / `output_dtype` |
+| `dc.omniEmbedding.provider.Voyage` | `api.voyageai.com/v1/embeddings`, text (`voyage-3*`) + code (`voyage-code-3`) + domain (`voyage-finance-2`, `voyage-law-2`, `voyage-multilingual-2`); `input_type` (`query`/`document`), `truncation`, `output_dimension`, `output_dtype` |
+| `dc.omniEmbedding.provider.Jina` | `api.jina.ai/v1/embeddings`, `jina-embeddings-v3` and `jina-*` variants; `input` wrapped as array; `task`, `dimensions`, `late_chunking`, `embedding_type` |
 
 ### **Architecture Overview**
 
@@ -100,8 +104,8 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│   %Net.HttpRequest → { Ollama | OpenAI | Azure |            │
-│                        Cohere | Gemini | Mistral }          │
+│   %Net.HttpRequest → { Ollama | OpenAI | Azure | Cohere |   │
+│                        Gemini | Mistral | Voyage | Jina }   │
 └─────────────────────────────────────────────────────────────┘
 
 ```
@@ -188,7 +192,7 @@ Every field is a top-level key on the JSON stored in `%Embedding.Config.Configur
 
 | Field | Required | Description |
 |---|---|---|
-| `provider` | one of: `ollama`, `openai`, `azure`, `cohere`, `gemini`, `mistral` (or infer from `modelName`) | Explicit provider selection |
+| `provider` | one of: `ollama`, `openai`, `azure`, `cohere`, `gemini`, `mistral`, `voyage`, `jina` (or infer from `modelName`) | Explicit provider selection |
 | `modelName` | yes | Model identifier for the target provider |
 | `dimensions` | yes | Expected vector length — enforced when checking fallbacks |
 | `apiKey` | provider-dependent | **Credential name** (not the value) — resolved via `Ens.Config.Credentials` |
@@ -207,6 +211,8 @@ Every field is a top-level key on the JSON stored in `%Embedding.Config.Configur
 - **Cohere:** `inputType` (default `search_document`)
 - **Gemini:** `taskType` (default `RETRIEVAL_DOCUMENT`)
 - **Mistral:** `outputDimension` (truncate — Codestral supports up to 3072), `outputDtype` (`float` · `int8` · `uint8` · `binary` · `ubinary`)
+- **Voyage:** `inputType` (`query` · `document`), `truncation` (bool), `outputDimension`, `outputDtype`
+- **Jina:** `task` (e.g. `retrieval.query` · `retrieval.passage` · `text-matching` · `classification`), `outputDimension` (mapped to Jina's `dimensions`), `lateChunking` (bool — coherent long-doc chunks), `outputDtype` (mapped to Jina's `embedding_type`)
 
 ### **Example — Ollama with an OpenAI fallback**
 
@@ -270,7 +276,9 @@ dc.omniEmbedding/
 │       ├── AzureOpenAi.cls
 │       ├── Cohere.cls
 │       ├── Gemini.cls
-│       └── Mistral.cls              # mistral-embed (text) + codestral-embed (code)
+│       ├── Mistral.cls              # mistral-embed (text) + codestral-embed (code)
+│       ├── Voyage.cls               # voyage-3, voyage-code-3, voyage-finance-2, ...
+│       └── Jina.cls                 # jina-embeddings-v3, with late_chunking
 ├── tests/dc/omniEmbedding/
 │   ├── TestOpenACompatible.cls    # Payload shape, parse errors, tiktoken floor
 │   ├── TestOllama.cls             # URL construction + end-to-end via Ollama
@@ -278,6 +286,8 @@ dc.omniEmbedding/
 │   ├── TestCohere.cls             # Property 10 — nested response parse
 │   ├── TestGemini.cls             # Property 10 — auth-in-URL, no-op SetAuth
 │   ├── TestMistral.cls            # URL, dispatch, output_dimension/dtype passthrough
+│   ├── TestVoyage.cls             # URL, dispatch, inputType enum, all passthroughs
+│   ├── TestJina.cls               # Property 17 — input always array; late_chunking; camelCase→wire mapping
 │   ├── TestResilience.cls         # Properties 11-14 — backoff & breaker
 │   ├── TestFallback.cls           # Properties 4-5 — vector-space invariance
 │   ├── TestSecurity.cls           # Property 15 — credentials never leak
@@ -315,7 +325,7 @@ The end-to-end integration test in `TestOllama` auto-probes `localhost:11434` th
 
 * [x] `%Embedding.Interface` bridge & runtime integration
 * [x] Provider resolution by explicit name or model-prefix inference
-* [x] Six providers: Ollama, OpenAI, Azure OpenAI, Cohere, Gemini, Mistral (text + code)
+* [x] Eight providers: Ollama, OpenAI, Azure OpenAI, Cohere, Gemini, Mistral (text + code), Voyage (text + code + domain), Jina (with `late_chunking`)
 * [x] Retry with exponential backoff + `Retry-After` honoring
 * [x] Circuit breaker (5 failures / 60 s cooldown / half-open probe)
 * [x] Fallback with vector-space invariance (fatal on mismatch)

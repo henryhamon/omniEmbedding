@@ -48,14 +48,16 @@ ClassMethod ResolveProvider(config As %DynamicObject) As %String
         If provider = "cohere"  { Return "dc.omniEmbedding.provider.Cohere" }
         If provider = "gemini"  { Return "dc.omniEmbedding.provider.Gemini" }
         If provider = "mistral" { Return "dc.omniEmbedding.provider.Mistral" }
-        Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: unknown provider '" _ config.%Get("provider") _ "'. Valid: ollama, openai, azure, cohere, gemini, mistral"
+        If provider = "voyage"  { Return "dc.omniEmbedding.provider.Voyage" }
+        If provider = "jina"    { Return "dc.omniEmbedding.provider.Jina" }
+        Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: unknown provider '" _ config.%Get("provider") _ "'. Valid: ollama, openai, azure, cohere, gemini, mistral, voyage, jina"
         $$$ThrowStatus($$$ERROR($$$GeneralError, errMsg))
     }
 
     Set model = $ZConvert(config.%Get("modelName"), "L")
 
     If model = "" {
-        Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: both 'provider' and 'modelName' are absent. Set 'provider' explicitly: ollama, openai, azure, cohere, gemini, mistral"
+        Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: both 'provider' and 'modelName' are absent. Set 'provider' explicitly: ollama, openai, azure, cohere, gemini, mistral, voyage, jina"
         $$$ThrowStatus($$$ERROR($$$GeneralError, errMsg))
     }
 
@@ -74,6 +76,14 @@ ClassMethod ResolveProvider(config As %DynamicObject) As %String
     // Mistral prefixes cover both text (mistral-embed) and code (codestral-embed).
     If ($Extract(model, 1, 8) = "mistral-") || ($Extract(model, 1, 10) = "codestral-") {
         Return "dc.omniEmbedding.provider.Mistral"
+    }
+    // Voyage prefixes cover text (voyage-3), code (voyage-code-3) and domain models.
+    If $Extract(model, 1, 7) = "voyage-" {
+        Return "dc.omniEmbedding.provider.Voyage"
+    }
+    // Jina prefixes cover jina-embeddings-* and other jina-* embed variants.
+    If $Extract(model, 1, 5) = "jina-" {
+        Return "dc.omniEmbedding.provider.Jina"
     }
 
     Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: cannot infer provider from modelName '" _ config.%Get("modelName") _ "'. Set config.provider explicitly."

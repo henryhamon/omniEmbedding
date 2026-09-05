@@ -252,3 +252,87 @@ Os requisitos derivados a seguir refletem fielmente as decisões de design docum
 2. THE Gateway SHALL verificar a dimensão do `%Vector` retornado contra `config.dimensions` e lançar exceção se houver divergência.
 3. WHEN duas configs Ollama com o mesmo `Vector_Space` estão configuradas como primária e fallback, THE Gateway SHALL executar o fallback com sucesso quando o Provider primário falha (simulado por config inválida).
 4. WHEN N falhas consecutivas são simuladas para um Provider Ollama, THE Circuit_Breaker SHALL abrir e fechar conforme os parâmetros de `FAILURE_THRESHOLD = 5` e `COOLDOWN_SECONDS = 60`.
+
+---
+
+## Expansão de Providers (v1.1+)
+
+Os requisitos abaixo foram adicionados após a entrega da v1.0. Eles ampliam a lista de provedores suportados sem alterar contratos existentes (Interface, Engine, Base) — apenas adicionam novas subclasses de Provider e novos ramos de despacho em `Engine.ResolveProvider`.
+
+**Prefixo de inferência atualizado**: `mistral-` / `codestral-` → Mistral; `voyage-` → Voyage; `jina-` / `jina-embeddings-` → Jina; para Bedrock, prefixo derivado do `modelId` (`amazon.titan-embed-`, `cohere.embed-` via Bedrock) só é seguro quando `provider = "bedrock"` está explícito, pois `cohere.embed-` colide com o Cohere direto.
+
+---
+
+### Requisito 17: Integração com Mistral (FR-14) — implementado
+
+**User Story:** Como integrador, quero usar Mistral (texto via `mistral-embed`, código via `codestral-embed`) através da mesma interface, para consolidar embeddings de conteúdo natural e código-fonte sob um único gateway.
+
+#### Critérios de Aceitação
+
+1. WHEN `config.provider = "mistral"` OU `config.modelName` começa com `"mistral-"` ou `"codestral-"`, THE Engine SHALL instanciar `dc.omniEmbedding.provider.Mistral`.
+2. THE Mistral Provider SHALL construir a URL como `https://api.mistral.ai/v1/embeddings` (constante).
+3. THE Mistral Provider SHALL herdar `BuildPayload` e `ParseResponse` de `OpenACompatible` (payload `{input, model}`, resposta `data[0].embedding`).
+4. WHEN `config.outputDimension` está presente, THE Mistral Provider SHALL adicionar o campo `output_dimension` ao payload (truncação server-side, útil para Codestral que suporta até 3072).
+5. WHEN `config.outputDtype` está presente, THE Mistral Provider SHALL adicionar o campo `output_dtype` ao payload (valores válidos: `float`, `int8`, `uint8`, `binary`, `ubinary`).
+6. THE Mistral Provider SHALL adicionar o cabeçalho `Authorization: Bearer {apiKey}` resolvido via `ResolveApiKey`.
+7. THE Mistral.ValidateConfig SHALL exigir `modelName` e `apiKey` não vazios.
+
+---
+
+### Requisito 18: Integração com Voyage AI (FR-15)
+
+**User Story:** Como integrador que já usa Voyage em pipelines de RAG, quero consumir `voyage-3`, `voyage-3-large`, `voyage-code-3` e famílias domain-specific (`voyage-finance-2`, `voyage-law-2`, `voyage-multilingual-2`) através do gateway, para unificar o código de retrieval independentemente do provedor.
+
+#### Critérios de Aceitação
+
+1. WHEN `config.provider = "voyage"` OU `config.modelName` começa com `"voyage-"`, THE Engine SHALL instanciar `dc.omniEmbedding.provider.Voyage`.
+2. THE Voyage Provider SHALL construir a URL como `https://api.voyageai.com/v1/embeddings` (constante).
+3. THE Voyage Provider SHALL herdar `ParseResponse` de `OpenACompatible` (resposta `data[0].embedding`).
+4. THE Voyage.BuildPayload SHALL construir `{"input": input, "model": modelName}` e adicionar passthrough opcional para os campos:
+   - `input_type` (valores esperados pela Voyage: `"query"` ou `"document"`) quando `config.inputType` presente
+   - `truncation` (booleano) quando `config.truncation` presente
+   - `output_dimension` (inteiro) quando `config.outputDimension` presente
+   - `output_dtype` (`float`|`int8`|`uint8`|`binary`|`ubinary`) quando `config.outputDtype` presente
+5. THE Voyage Provider SHALL adicionar o cabeçalho `Authorization: Bearer {apiKey}` resolvido via `ResolveApiKey`.
+6. THE Voyage.ValidateConfig SHALL exigir `modelName` e `apiKey` não vazios.
+7. IF `config.inputType` estiver presente com valor diferente de `"query"` ou `"document"`, THEN THE Voyage.ValidateConfig SHALL lançar exceção identificando o campo e os valores válidos.
+
+---
+
+### Requisito 19: Integração com Jina AI (FR-16)
+
+**User Story:** Como desenvolvedor, quero consumir os modelos de embedding da Jina (`jina-embeddings-v3` e derivados) através do gateway, aproveitando features como `late_chunking` para documentos longos sem alterar meu código de retrieval.
+
+#### Critérios de Aceitação
+
+1. WHEN `config.provider = "jina"` OU `config.modelName` começa com `"jina-"` ou `"jina-embeddings-"`, THE Engine SHALL instanciar `dc.omniEmbedding.provider.Jina`.
+2. THE Jina Provider SHALL construir a URL como `https://api.jina.ai/v1/embeddings` (constante).
+3. THE Jina Provider SHALL herdar `ParseResponse` de `OpenACompatible` (resposta `data[0].embedding`).
+4. THE Jina.BuildPayload SHALL construir `{"input": [input], "model": modelName}` (Jina exige `input` como array mesmo para um único texto) e adicionar passthrough opcional para os campos:
+   - `task` (ex.: `"retrieval.query"`, `"retrieval.passage"`, `"text-matching"`, `"classification"`) quando `config.task` presente
+   - `dimensions` (inteiro — truncação server-side) quando `config.outputDimension` presente
+   - `late_chunking` (booleano) quando `config.lateChunking` presente
+   - `embedding_type` (`float`|`base64`|`binary`|`ubinary`) quando `config.outputDtype` presente
+5. THE Jina Provider SHALL adicionar o cabeçalho `Authorization: Bearer {apiKey}` resolvido via `ResolveApiKey`.
+6. THE Jina.ValidateConfig SHALL exigir `modelName` e `apiKey` não vazios.
+
+---
+
+### Requisito 20: Integração com AWS Bedrock (FR-17)
+
+**User Story:** Como arquiteto em uma organização que padroniza modelos via AWS Bedrock, quero consumir os embeddings hospedados na Bedrock (Titan v2, Cohere via Bedrock) através do mesmo gateway, mantendo autenticação por credenciais IAM e roteamento por `region` sem depender de SDKs externos.
+
+#### Critérios de Aceitação
+
+1. WHEN `config.provider = "bedrock"`, THE Engine SHALL instanciar `dc.omniEmbedding.provider.Bedrock`.
+2. THE Bedrock Provider SHALL construir a URL como `https://bedrock-runtime.{region}.amazonaws.com/model/{modelId}/invoke`, onde `region` vem de `config.region` e `modelId` vem de `config.modelName`.
+3. THE Bedrock Provider SHALL autenticar cada requisição via **AWS Signature Version 4** (SigV4) sobre o serviço `bedrock`, usando `accessKeyId`, `secretAccessKey` (via `ResolveApiKey` — o nome da credencial é `config.apiKey`; o segredo resolvido é interpretado como `{accessKeyId}:{secretAccessKey}` ou como JSON `{"accessKeyId":"...","secretAccessKey":"..."}`) e opcionalmente `sessionToken` (via `config.sessionTokenCredential` — outro nome de credencial resolvido separadamente).
+4. THE Bedrock Provider SHALL despachar o payload e parse conforme o `modelId`:
+   - IF `modelId` começa com `"amazon.titan-embed-"`, THEN payload = `{"inputText": input, "dimensions": config.dimensions, "normalize": true}` e resposta parseada em `.embedding`.
+   - IF `modelId` começa com `"cohere.embed-"` (via Bedrock), THEN payload = `{"texts": [input], "input_type": config.inputType ?? "search_document"}` e resposta parseada em `.embeddings[0]`.
+5. IF `config.region` estiver ausente, THEN THE Bedrock.ValidateConfig SHALL lançar exceção identificando o campo.
+6. IF `modelId` não corresponder a nenhuma família suportada (Titan, Cohere via Bedrock), THEN THE Bedrock Provider SHALL lançar exceção listando as famílias suportadas.
+7. THE Bedrock.SigV4 SHALL derivar a chave de assinatura via `HMAC-SHA256("aws4_request", HMAC-SHA256("bedrock", HMAC-SHA256(region, HMAC-SHA256(date, "AWS4"+secretAccessKey))))` conforme especificação AWS.
+8. THE Bedrock.SigV4 SHALL montar o cabeçalho `Authorization: AWS4-HMAC-SHA256 Credential={accessKeyId}/{date}/{region}/bedrock/aws4_request, SignedHeaders={headers}, Signature={hex}`.
+9. THE Bedrock Provider SHALL adicionar os cabeçalhos `x-amz-date` (ISO8601 UTC compact) e, se `sessionToken` presente, `x-amz-security-token`.
+10. THE Bedrock Provider SHALL NUNCA logar `secretAccessKey`, `sessionToken` nem a `Signature` — apenas o `accessKeyId` (identificador público) e o `Credential Scope` podem aparecer em mensagens de erro/diagnóstico.

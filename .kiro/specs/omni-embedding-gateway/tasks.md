@@ -306,6 +306,154 @@ Todas as classes de produção residem em `src/dc/omniEmbedding/`; todas as clas
 
 ---
 
+## Expansão v1.1+ — Novos Providers
+
+Adicionadas após a v1.0. Cada nova fase é **incremental**: não altera Interface, Engine (exceto ramos de despacho em `ResolveProvider`), Base, `RetryWithBackoff` ou `TryFallback`.
+
+---
+
+- [x] 9. Fase 8 — Mistral (retrofit v1.0.4)
+  - [x] 9.1 Criar `dc.omniEmbedding.provider.Mistral`
+    - Criar arquivo `src/dc/omniEmbedding/provider/Mistral.cls`; estende `OpenACompatible`
+    - Implementar `GetEmbeddingsUrl()`: retornar `"https://api.mistral.ai/v1/embeddings"` (constante)
+    - Implementar `ValidateConfig()`: chamar `##super()` + assert `apiKey` não vazio
+    - Implementar `BuildPayload()`: chamar `##super()` e adicionar passthrough opcional para `output_dimension` (config.outputDimension) e `output_dtype` (config.outputDtype)
+    - Auth Bearer + parse `data[0].embedding` são herdados de `OpenACompatible`
+    - _Requisitos: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7_
+
+  - [x] 9.2 Adicionar ramo de despacho para Mistral em `Engine.ResolveProvider`
+    - Explícito: `provider = "mistral"` → `dc.omniEmbedding.provider.Mistral`
+    - Prefixo: `modelName` começa com `"mistral-"` OU `"codestral-"` → Mistral
+    - Atualizar mensagem de "unknown provider" para listar `mistral` entre os válidos
+    - _Requisitos: 17.1_
+
+  - [x]* 9.3 Escrever testes unitários para `dc.omniEmbedding.provider.Mistral`
+    - Criar arquivo `tests/dc/omniEmbedding/TestMistral.cls`
+    - Testar URL fixa, ValidateConfig (apiKey + modelName), BuildPayload minimal + com cada extra (`output_dimension`, `output_dtype`, ambos), Auth Bearer via credential hook, dispatch explícito + por prefixo `mistral-` + por prefixo `codestral-`, ParseResponse em resposta real Mistral, unknown provider lista `mistral` na mensagem
+    - _Requisitos: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7_
+
+  - [x] 9.4 Checkpoint — Mistral funcional
+    - Todos os 13 testes de `TestMistral` passam
+    - Regressão completa (10 suites) verde
+    - `module.xml` version bump para 1.0.4
+
+---
+
+- [x] 10. Fase 9 — Voyage AI
+  - [x] 10.1 Criar `dc.omniEmbedding.provider.Voyage`
+    - Criar arquivo `src/dc/omniEmbedding/provider/Voyage.cls`; estende `OpenACompatible`
+    - Implementar `GetEmbeddingsUrl()`: retornar `"https://api.voyageai.com/v1/embeddings"` (constante)
+    - Implementar `ValidateConfig()`: chamar `##super()` + assert `apiKey` não vazio; se `config.inputType` presente, exigir valor em `{"query","document"}` — caso contrário lançar identificando campo e conjunto válido
+    - Implementar `BuildPayload()`: chamar `##super()` e adicionar passthrough opcional para `input_type` (config.inputType), `truncation` (config.truncation), `output_dimension` (config.outputDimension), `output_dtype` (config.outputDtype)
+    - Auth Bearer + parse `data[0].embedding` herdados de `OpenACompatible`
+    - _Requisitos: 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7_
+
+  - [x] 10.2 Adicionar ramo de despacho para Voyage em `Engine.ResolveProvider`
+    - Explícito: `provider = "voyage"` → `dc.omniEmbedding.provider.Voyage`
+    - Prefixo: `modelName` começa com `"voyage-"` → Voyage
+    - Atualizar mensagem de "unknown provider" para listar `voyage`
+    - _Requisitos: 18.1_
+
+  - [x]* 10.3 Escrever testes unitários para `dc.omniEmbedding.provider.Voyage`
+    - Criar arquivo `tests/dc/omniEmbedding/TestVoyage.cls`
+    - Testar URL fixa, ValidateConfig (apiKey + modelName + inputType inválido rejeitado), BuildPayload minimal + com cada extra + com todos os extras juntos, dispatch explícito + por prefixo `voyage-`, ParseResponse em resposta OpenAI-shape
+    - **Property 16 (novo): validação de enum de inputType** — para qualquer valor de `config.inputType` diferente de `query` ou `document`, `ValidateConfig` lança exceção identificando ambos
+    - _Requisitos: 18.4, 18.6, 18.7_
+
+  - [x] 10.4 Checkpoint — Voyage funcional
+    - Todos os testes de `TestVoyage` passam
+    - Regressão completa verde
+    - Bump de versão em `module.xml`
+
+---
+
+- [x] 11. Fase 10 — Jina AI
+  - [x] 11.1 Criar `dc.omniEmbedding.provider.Jina`
+    - Criar arquivo `src/dc/omniEmbedding/provider/Jina.cls`; estende `OpenACompatible`
+    - Implementar `GetEmbeddingsUrl()`: retornar `"https://api.jina.ai/v1/embeddings"` (constante)
+    - Implementar `ValidateConfig()`: chamar `##super()` + assert `apiKey` não vazio
+    - Implementar `BuildPayload()`: NÃO chamar `##super()` diretamente para o campo `input` (Jina exige array); construir `{"input": [input], "model": modelName}` e adicionar passthrough opcional para `task` (config.task), `dimensions` (config.outputDimension — nome distinto de Voyage/Mistral!), `late_chunking` (config.lateChunking), `embedding_type` (config.outputDtype)
+    - Auth Bearer + parse `data[0].embedding` herdados de `OpenACompatible`
+    - _Requisitos: 19.1, 19.2, 19.3, 19.4, 19.5, 19.6_
+
+  - [x] 11.2 Adicionar ramo de despacho para Jina em `Engine.ResolveProvider`
+    - Explícito: `provider = "jina"` → `dc.omniEmbedding.provider.Jina`
+    - Prefixo: `modelName` começa com `"jina-"` (inclui `jina-embeddings-`) → Jina
+    - Atualizar mensagem de "unknown provider" para listar `jina`
+    - _Requisitos: 19.1_
+
+  - [x]* 11.3 Escrever testes unitários para `dc.omniEmbedding.provider.Jina`
+    - Criar arquivo `tests/dc/omniEmbedding/TestJina.cls`
+    - Testar URL fixa, ValidateConfig, BuildPayload (input SEMPRE como array de 1 elemento; task/dimensions/late_chunking/embedding_type passthrough), dispatch explícito + prefixo `jina-`, ParseResponse
+    - **Property 17 (novo): input SEMPRE como array** — para qualquer `input`, `BuildPayload` retorna objeto com `input` = array de 1 elemento (nunca string escalar), diferindo de Mistral/Voyage/OpenAI
+    - _Requisitos: 19.4_
+
+  - [x] 11.4 Checkpoint — Jina funcional
+    - Todos os testes de `TestJina` passam
+    - Regressão completa verde
+    - **CI reforçado**: adicionar `JINA_API_KEY` como secret do GitHub para teste de integração end-to-end contra `api.jina.ai` (Jina tem free tier generoso — bom paralelo com Ollama para providers cloud-only)
+    - Bump de versão em `module.xml`
+
+---
+
+- [ ] 12. Fase 11 — AWS Bedrock (SigV4 + payload por família)
+  - [ ] 12.1 Criar `dc.omniEmbedding.util.SigV4` (utilitário isolado)
+    - Criar arquivo `src/dc/omniEmbedding/util/SigV4.cls`
+    - Implementar `Sign(request, method, url, region, service, accessKeyId, secretAccessKey, sessionToken, payload)` que retorna o cabeçalho `Authorization` completo e seta `x-amz-date` / `x-amz-security-token`
+    - Algoritmo AWS Signature V4 completo:
+      - Canonical request (method + URI + query + canonical headers + signed headers + payload hash SHA-256)
+      - String to sign (`AWS4-HMAC-SHA256` + amzDate + credentialScope + hash do canonical request)
+      - Derivar chave: `kSecret = "AWS4"+secretAccessKey`; `kDate = HMAC(kSecret, date)`; `kRegion = HMAC(kDate, region)`; `kService = HMAC(kRegion, service)`; `kSigning = HMAC(kService, "aws4_request")`
+      - Signature = hex(HMAC(kSigning, stringToSign))
+    - Usar `$SYSTEM.Encryption.HMACSHA()` para HMAC-SHA256 e `$SYSTEM.Encryption.SHAHash()` para SHA-256
+    - `secretAccessKey`, `sessionToken` e `Signature` NUNCA aparecem em logs ou exceções (Property 15 estendida)
+    - _Requisitos: 20.7, 20.8, 20.9, 20.10_
+
+  - [ ]* 12.2 Escrever testes unitários para `dc.omniEmbedding.util.SigV4`
+    - Criar arquivo `tests/dc/omniEmbedding/TestSigV4.cls`
+    - **Property 18 (novo): assinatura conforme AWS SigV4 test suite** — usar vetores oficiais da AWS (`aws-sig-v4-test-suite`) e verificar canonical request, string to sign e signature byte-a-byte
+    - Testar cabeçalhos: `x-amz-date` no formato `YYYYMMDDTHHMMSSZ`; `x-amz-security-token` presente apenas quando `sessionToken` não vazio
+    - **Property 15 estendida**: exceção em falha nunca contém `secretAccessKey` nem `Signature`
+    - _Requisitos: 20.7, 20.8, 20.9, 20.10_
+
+  - [ ] 12.3 Criar `dc.omniEmbedding.provider.Bedrock`
+    - Criar arquivo `src/dc/omniEmbedding/provider/Bedrock.cls`; estende `Base` (NÃO estende `OpenACompatible` — payload e resposta variam por família)
+    - Implementar `GetEmbeddingsUrl()`: `"https://bedrock-runtime."_config.region_".amazonaws.com/model/"_config.modelName_"/invoke"`
+    - Implementar `SetAuth()`: parsear credencial resolvida (formato `accessKeyId:secretAccessKey` OU JSON `{"accessKeyId":"...","secretAccessKey":"..."}`); se `config.sessionTokenCredential` presente, resolver como segundo lookup; chamar `SigV4.Sign(...)` e aplicar cabeçalhos ao `%Net.HttpRequest`
+    - Implementar `BuildPayload()` com despacho por prefixo de `modelName`:
+      - `amazon.titan-embed-*`: `{"inputText": input, "dimensions": config.dimensions, "normalize": true}`
+      - `cohere.embed-*` (via Bedrock): `{"texts": [input], "input_type": config.inputType ?? "search_document"}`
+      - Outro: lançar exceção listando famílias suportadas
+    - Implementar `ParseResponse()` com despacho pela mesma família (memorizada em global process-private durante `BuildPayload`, OU re-decidida a partir do `modelName` disponível na config — última abordagem preferida por simetria):
+      - Titan: extrair `.embedding` (array raso)
+      - Cohere via Bedrock: extrair `.embeddings[0]` (array aninhado)
+    - Implementar `ValidateConfig()`: chamar `##super()` + assert `region` e `apiKey` não vazios; assert `modelName` corresponde a família suportada
+    - _Requisitos: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6_
+
+  - [ ] 12.4 Adicionar ramo de despacho para Bedrock em `Engine.ResolveProvider`
+    - Explícito: `provider = "bedrock"` → `dc.omniEmbedding.provider.Bedrock`
+    - **Sem inferência por prefixo** — `cohere.embed-*` colide com Cohere direto; exigir `provider = "bedrock"` explícito e documentar no README
+    - Atualizar mensagem de "unknown provider" para listar `bedrock`
+    - _Requisitos: 20.1_
+
+  - [ ]* 12.5 Escrever testes unitários para `dc.omniEmbedding.provider.Bedrock`
+    - Criar arquivo `tests/dc/omniEmbedding/TestBedrock.cls`
+    - URL composta a partir de region + modelId
+    - BuildPayload para Titan (`inputText`/`dimensions`/`normalize`) e para Cohere-via-Bedrock (`texts[]`/`input_type`)
+    - ParseResponse para ambos os shapes
+    - ValidateConfig rejeita: region ausente, apiKey ausente, modelName de família não suportada
+    - **Property 19 (novo): SigV4 aplicado com header `Authorization` iniciando com `AWS4-HMAC-SHA256`** — usar mock de request e verificar prefixo
+    - Dispatch: explícito funciona; sem prefixo de inferência (validar que `modelName = "cohere.embed-english-v3"` SEM `provider = "bedrock"` continua indo para o Cohere direto, não Bedrock)
+    - _Requisitos: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6_
+
+  - [ ] 12.6 Checkpoint — Bedrock funcional
+    - Todos os testes de `TestBedrock` e `TestSigV4` passam
+    - Regressão completa verde
+    - Documentar no README: (a) Bedrock exige `provider = "bedrock"` explícito, (b) formato do valor da credencial (`accessKeyId:secretAccessKey` ou JSON), (c) uso opcional de `sessionTokenCredential` para roles temporárias
+    - Bump de versão em `module.xml`
+
+---
+
 ## Notes
 
 - Tasks marcadas com `*` são opcionais e podem ser puladas para um MVP mais rápido
@@ -329,7 +477,13 @@ Todas as classes de produção residem em `src/dc/omniEmbedding/`; todas as clas
     { "id": 5, "tasks": ["4.2", "5.2", "6.1", "6.2"] },
     { "id": 6, "tasks": ["6.3", "7.1"] },
     { "id": 7, "tasks": ["7.2", "8.1", "8.3", "8.5"] },
-    { "id": 8, "tasks": ["8.2", "8.4", "8.6"] }
+    { "id": 8, "tasks": ["8.2", "8.4", "8.6"] },
+    { "id": 9, "tasks": ["9.1", "9.2", "9.3", "9.4"] },
+    { "id": 10, "tasks": ["10.1", "10.2", "10.3", "10.4"] },
+    { "id": 11, "tasks": ["11.1", "11.2", "11.3", "11.4"] },
+    { "id": 12, "tasks": ["12.1", "12.2", "12.3", "12.4", "12.5", "12.6"] }
   ]
 }
 ```
+
+Waves 9-11 (Mistral / Voyage / Jina) são **paralelizáveis entre si** — nenhuma altera contratos compartilhados. Wave 12 (Bedrock) fica isolada por conta do novo módulo SigV4.

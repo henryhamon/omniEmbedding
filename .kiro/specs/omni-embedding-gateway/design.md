@@ -1134,3 +1134,82 @@ END
 | ADR-008 | `EstimateTokenCount` polimórfico com piso conservador | CI sem dependência Python; produção pode usar tiktoken cacheado |
 | ADR-009 | Retry com backoff + circuit breaker via global | Duas camadas de resiliência; circuit breaker cross-process via `^global` |
 | ADR-010 | Fallback só entre réplicas do mesmo espaço vetorial | Integridade vetorial é sagrada; incompatível rejeitado explicitamente |
+
+---
+
+## Expansão v1.1+ — Novos Providers
+
+Esta seção documenta os providers adicionados após a v1.0. Nenhum altera Interface, Engine (exceto ramos de `ResolveProvider`), Base, `RetryWithBackoff` ou `TryFallback`. Cada novo provider entra como uma subclasse pura seguindo o Template Method existente.
+
+### Diagrama atualizado
+
+```mermaid
+graph TD
+    ENGINE["dc.omniEmbedding.Engine"]
+    BASE["dc.omniEmbedding.provider.Base [Abstract]"]
+    OAC["provider.OpenACompatible [Abstract]"]
+    SIGV4["util.SigV4 (helper)"]
+
+    ENGINE --> BASE
+    BASE --> OAC
+    BASE --> COHERE["Cohere"]
+    BASE --> GEMINI["Gemini"]
+    BASE --> BEDROCK["Bedrock (v1.1)"]
+    OAC --> OPENAI["OpenAi"]
+    OAC --> AZURE["AzureOpenAi"]
+    OAC --> OLLAMA["Ollama"]
+    OAC --> MISTRAL["Mistral (v1.0.4)"]
+    OAC --> VOYAGE["Voyage (v1.1)"]
+    OAC --> JINA["Jina (v1.1)"]
+    BEDROCK -.usa.-> SIGV4
+
+    OPENAI -->|POST /v1/embeddings| EXT_OPENAI["api.openai.com"]
+    AZURE -->|POST /openai/deployments/...| EXT_AZURE["*.openai.azure.com"]
+    OLLAMA -->|POST /v1/embeddings| EXT_OLLAMA["localhost:11434"]
+    COHERE -->|POST /v2/embed| EXT_COHERE["api.cohere.com"]
+    GEMINI -->|POST /:embedContent| EXT_GEMINI["generativelanguage.googleapis.com"]
+    MISTRAL -->|POST /v1/embeddings| EXT_MISTRAL["api.mistral.ai"]
+    VOYAGE -->|POST /v1/embeddings| EXT_VOYAGE["api.voyageai.com"]
+    JINA -->|POST /v1/embeddings| EXT_JINA["api.jina.ai"]
+    BEDROCK -->|POST /model/&#123;id&#125;/invoke SigV4| EXT_BEDROCK["bedrock-runtime.&#123;region&#125;.amazonaws.com"]
+```
+
+### Matriz de comportamento por provider
+
+| Provider | Herda | URL | Payload distinto | Auth | Parse |
+|---|---|---|---|---|---|
+| Ollama | OpenACompatible | `apiBase or localhost:11434` + `/v1/embeddings` | (herdado) | **no-op** | (herdado) |
+| OpenAi | OpenACompatible | constante `api.openai.com/v1/embeddings` | (herdado) | Bearer | (herdado) |
+| AzureOpenAi | OpenACompatible | composta com `deployment` + `apiVersion` | (herdado) | `api-key` header | (herdado) |
+| Mistral | OpenACompatible | constante | + `output_dimension`, `output_dtype` | Bearer | (herdado) |
+| Voyage | OpenACompatible | constante | + `input_type`, `truncation`, `output_dimension`, `output_dtype` | Bearer | (herdado) |
+| Jina | OpenACompatible | constante | `input` como **array**, + `task`, `dimensions`, `late_chunking`, `embedding_type` | Bearer | (herdado) |
+| Cohere | Base | constante `v2/embed` | `texts[]`, `input_type`, `embedding_types` | Bearer | `embeddings.float[0]` (aninhado) |
+| Gemini | Base | com `?key=` (auth na URL) | `content.parts[0].text` | **no-op** (na URL) | `embedding.values` |
+| Bedrock | Base | por region + modelId | por família (Titan / Cohere via Bedrock) | **SigV4** | por família (Titan `.embedding` / Cohere-via-BR `.embeddings[0]`) |
+
+### Contrato de `outputDimension` e `outputDtype` (padronização cross-provider)
+
+Cada provider tem seu nome nativo para "truncar server-side" e "tipo de saída". No config do gateway padronizamos em **camelCase**:
+
+| Config field | Mistral | Voyage | Jina |
+|---|---|---|---|
+| `outputDimension` | `output_dimension` | `output_dimension` | `dimensions` |
+| `outputDtype` | `output_dtype` | `output_dtype` | `embedding_type` |
+
+Essa mediação é responsabilidade de cada Provider (feita em `BuildPayload`) — o Caller escreve sempre o mesmo campo.
+
+### Decisão: Bedrock sem inferência por prefixo
+
+O `modelId` `cohere.embed-english-v3` colide semanticamente com um modelo Cohere direto que também poderia se chamar `cohere.embed-*`. Para evitar despacho ambíguo, **Bedrock exige `provider = "bedrock"` explícito**. A tabela de prefixos permanece inequívoca: `nomic-` / `mxbai-` / `*llama*` → Ollama; `text-embedding-` → OpenAI; `embed-` → Cohere; `embedding-` → Gemini; `mistral-` / `codestral-` → Mistral; `voyage-` → Voyage; `jina-` → Jina.
+
+### ADRs adicionados
+
+| ID | Decisão | Justificativa |
+|---|---|---|
+| ADR-011 | Mistral, Voyage, Jina estendem `OpenACompatible` | Payload e resposta compartilhados evitam duplicação; apenas passthroughs opcionais em `BuildPayload` |
+| ADR-012 | Jina envia `input` sempre como array de 1 elemento | Contrato da API Jina — variação pequena e absorvida em `BuildPayload` |
+| ADR-013 | `outputDimension` / `outputDtype` padronizados em camelCase no config | Caller escreve uma vez, cada Provider mapeia para seu nome nativo — reduz vazamento de detalhe de vendor no domínio |
+| ADR-014 | Bedrock exige `provider = "bedrock"` explícito (sem inferência por prefixo) | Prefixo `cohere.embed-*` colide com Cohere direto; ambiguidade eliminada por design |
+| ADR-015 | SigV4 isolado em `util.SigV4` — não em `Base` nem em `Bedrock` | Único caso hoje que precisa; isolamento mantém `Base.RetryWithBackoff` e Providers OpenAI-family sem contaminação; testável independentemente contra os vetores oficiais da AWS |
+| ADR-016 | Credencial Bedrock resolvida como `accessKeyId:secretAccessKey` (ou JSON) sob nome único | Reusa `Ens.Config.Credentials` sem introduzir um segundo store; `sessionToken` (temporário) fica em segundo nome opcional |
