@@ -22,6 +22,7 @@ InterSystems IRIS 2026 ships a native embeddings runtime — `%Embedding.Interfa
 - **Azure OpenAI** wants `api-key` (not `Bearer`) and a deployment-scoped URL
 - **Cohere** returns embeddings under `embeddings.float[0]`
 - **Gemini** authenticates via `?key=` on the URL itself
+- **Mistral** is OpenAI-shaped but adds `output_dimension` / `output_dtype` for Codestral truncation
 
 Swapping providers usually means rewriting glue code, and mixing them in fallback flows silently mixes vector spaces — a data-integrity disaster that only surfaces months later, when your similarity searches start returning nonsense.
 
@@ -29,7 +30,7 @@ Swapping providers usually means rewriting glue code, and mixing them in fallbac
 
 Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')` call — from SQL, from ObjectScript, from Interoperability — routes to the right provider, retries transient errors, opens a circuit breaker on failing providers, and **refuses** to fall back to a config whose vector space differs from the primary.
 
-- ✅ **Five providers, one interface:** Ollama · OpenAI · Azure OpenAI · Cohere · Gemini
+- ✅ **Six providers, one interface:** Ollama · OpenAI · Azure OpenAI · Cohere · Gemini · Mistral (text + code)
 - ✅ **Native HTTP:** `%Net.HttpRequest` — no Python required on the hot path
 - ✅ **Resilient:** exponential backoff, `Retry-After` honored, circuit breaker per provider
 - ✅ **Safe fallback:** vector-space invariance is enforced *before* any HTTP call
@@ -40,7 +41,7 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
 
 ## 🛠️ How It Works
 
-`dc.omniEmbedding` sits between IRIS's native embedding runtime and any of the five supported external providers, applying three architectural pillars:
+`dc.omniEmbedding` sits between IRIS's native embedding runtime and any of the six supported external providers, applying three architectural pillars:
 
 1. **HTTP native first** — the happy path uses `%Net.HttpRequest` end-to-end; Embedded Python is opt-in only (for accurate `tiktoken` token counts).
 2. **Polymorphism by class hierarchy** — a Template Method in `provider.Base` fixes the sequence `ValidateConfig → SetAuth → GetEmbeddingsUrl → BuildPayload → RetryWithBackoff → ParseResponse`; each provider overrides only what differs.
@@ -59,6 +60,7 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
 | `dc.omniEmbedding.provider.AzureOpenAi` | Deployment-scoped URL, `api-key` header |
 | `dc.omniEmbedding.provider.Cohere` | `v2/embed`, nested `embeddings.float[0]` |
 | `dc.omniEmbedding.provider.Gemini` | Auth via `?key=`, `content.parts[].text` payload |
+| `dc.omniEmbedding.provider.Mistral` | `api.mistral.ai/v1/embeddings`, text (`mistral-embed`) + code (`codestral-embed`), optional `output_dimension` / `output_dtype` |
 
 ### **Architecture Overview**
 
@@ -99,7 +101,7 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │   %Net.HttpRequest → { Ollama | OpenAI | Azure |            │
-│                        Cohere | Gemini }                    │
+│                        Cohere | Gemini | Mistral }          │
 └─────────────────────────────────────────────────────────────┘
 
 ```
@@ -186,7 +188,7 @@ Every field is a top-level key on the JSON stored in `%Embedding.Config.Configur
 
 | Field | Required | Description |
 |---|---|---|
-| `provider` | one of: `ollama`, `openai`, `azure`, `cohere`, `gemini` (or infer from `modelName`) | Explicit provider selection |
+| `provider` | one of: `ollama`, `openai`, `azure`, `cohere`, `gemini`, `mistral` (or infer from `modelName`) | Explicit provider selection |
 | `modelName` | yes | Model identifier for the target provider |
 | `dimensions` | yes | Expected vector length — enforced when checking fallbacks |
 | `apiKey` | provider-dependent | **Credential name** (not the value) — resolved via `Ens.Config.Credentials` |
@@ -204,6 +206,7 @@ Every field is a top-level key on the JSON stored in `%Embedding.Config.Configur
 - **Azure OpenAI:** `deployment`, `apiVersion` (`deployment` is optional when `apiBase` is already deployment-scoped)
 - **Cohere:** `inputType` (default `search_document`)
 - **Gemini:** `taskType` (default `RETRIEVAL_DOCUMENT`)
+- **Mistral:** `outputDimension` (truncate — Codestral supports up to 3072), `outputDtype` (`float` · `int8` · `uint8` · `binary` · `ubinary`)
 
 ### **Example — Ollama with an OpenAI fallback**
 
@@ -218,6 +221,21 @@ Every field is a top-level key on the JSON stored in `%Embedding.Config.Configur
 ```
 
 An OpenAI config with `text-embedding-3-small` (1536 dims) as a fallback would be **rejected before any HTTP call** — different vector space.
+
+### **Example — Mistral Codestral for code retrieval, truncated to 1024 dims**
+
+```json
+{
+    "provider": "mistral",
+    "modelName": "codestral-embed",
+    "apiKey": "mistral-prod",
+    "outputDimension": 1024,
+    "outputDtype": "float",
+    "dimensions": 1024
+}
+```
+
+`outputDimension` tells Mistral to truncate the vector server-side (Codestral supports up to 3072); `dimensions` is what the gateway enforces on fallbacks and what IRIS stores.
 
 ---
 
@@ -251,13 +269,15 @@ dc.omniEmbedding/
 │       ├── OpenAi.cls
 │       ├── AzureOpenAi.cls
 │       ├── Cohere.cls
-│       └── Gemini.cls
+│       ├── Gemini.cls
+│       └── Mistral.cls              # mistral-embed (text) + codestral-embed (code)
 ├── tests/dc/omniEmbedding/
 │   ├── TestOpenACompatible.cls    # Payload shape, parse errors, tiktoken floor
 │   ├── TestOllama.cls             # URL construction + end-to-end via Ollama
 │   ├── TestAzureUrl.cls           # Property 8 — URL composition invariants
 │   ├── TestCohere.cls             # Property 10 — nested response parse
 │   ├── TestGemini.cls             # Property 10 — auth-in-URL, no-op SetAuth
+│   ├── TestMistral.cls            # URL, dispatch, output_dimension/dtype passthrough
 │   ├── TestResilience.cls         # Properties 11-14 — backoff & breaker
 │   ├── TestFallback.cls           # Properties 4-5 — vector-space invariance
 │   ├── TestSecurity.cls           # Property 15 — credentials never leak
@@ -295,7 +315,7 @@ The end-to-end integration test in `TestOllama` auto-probes `localhost:11434` th
 
 * [x] `%Embedding.Interface` bridge & runtime integration
 * [x] Provider resolution by explicit name or model-prefix inference
-* [x] Five providers: Ollama, OpenAI, Azure OpenAI, Cohere, Gemini
+* [x] Six providers: Ollama, OpenAI, Azure OpenAI, Cohere, Gemini, Mistral (text + code)
 * [x] Retry with exponential backoff + `Retry-After` honoring
 * [x] Circuit breaker (5 failures / 60 s cooldown / half-open probe)
 * [x] Fallback with vector-space invariance (fatal on mismatch)
