@@ -95,7 +95,9 @@ ClassMethod RetryWithBackoff(request As %Net.HttpRequest, url As %String, config
 
         Set sc = request.Post(url)
         If $$$ISERR(sc) {
-            $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding.provider.Base: HTTP transport error for URL: "_url))
+            Set transportErr = $System.Status.GetErrorText(sc)
+            Set hint = ..TransportHint(url, transportErr)
+            $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding: HTTP transport error on POST '"_url_"'. Cause: "_transportErr_hint))
         }
 
         Set lastStatus = request.HttpResponse.StatusCode
@@ -110,7 +112,8 @@ ClassMethod RetryWithBackoff(request As %Net.HttpRequest, url As %String, config
 
         // Fast-fail on 4xx that are NOT 429
         If ..IsFastFailStatus(lastStatus) {
-            $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding.provider.Base: HTTP "_lastStatus_" from '"_url_"' (fast-fail, no retry): "_lastBody))
+            Set hint = ..StatusHint(lastStatus, config)
+            $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding: HTTP "_lastStatus_" from '"_url_"' (fast-fail, no retry). "_hint_" Body: "_lastBody))
         }
 
         // Last attempt: don't sleep, fall through to throw
@@ -125,7 +128,52 @@ ClassMethod RetryWithBackoff(request As %Net.HttpRequest, url As %String, config
         If delayMs > 0 { Hang delayMs / 1000 }
     }
 
-    $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding.provider.Base: HTTP "_lastStatus_" from '"_url_"' (exhausted "_maxAttempts_" attempts): "_lastBody))
+    Set hint = ..StatusHint(lastStatus, config)
+    $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding: HTTP "_lastStatus_" from '"_url_"' (exhausted "_maxAttempts_" attempts). "_hint_" Body: "_lastBody))
+}
+
+/// Returns an actionable hint for common HTTP failure codes.
+/// Never leaks the resolved credential value — only the credential NAME
+/// (which is public metadata already visible in %Embedding.Config).
+ClassMethod StatusHint(status As %Integer, config As %DynamicObject) As %String [ Internal ]
+{
+    Set credName = config.%Get("apiKey")
+    If status = 401 {
+        Return "Hint: authentication failed — check that Ens.Config.Credentials '"_credName_"' holds a valid, non-expired key for the provider; regenerate the key in the provider portal if unsure."
+    }
+    If status = 403 {
+        Return "Hint: forbidden — the credential '"_credName_"' resolves, but lacks permission for this endpoint/model/region (check IAM/subscription/quotas on the provider side)."
+    }
+    If status = 404 {
+        Return "Hint: not found — verify config.modelName (or Azure deployment name / Bedrock modelId / GCP project+region) matches something that actually exists at the URL above."
+    }
+    If status = 413 {
+        Return "Hint: payload too large — reduce input length or split into chunks before calling EMBEDDING()."
+    }
+    If status = 422 {
+        Return "Hint: invalid request — check that provider-specific fields (input_type, taskType, outputDimension, etc.) match the model's supported values."
+    }
+    If status = 429 {
+        Return "Hint: rate limited — the gateway honors Retry-After; if persistent, increase config.retry.maxAttempts, back off caller concurrency, or ask the provider for a higher quota."
+    }
+    If (status >= 500) && (status < 600) {
+        Return "Hint: upstream provider error — usually transient; the gateway already retried up to config.retry.maxAttempts (default 3)."
+    }
+    Return ""
+}
+
+/// Returns an actionable hint for transport-level failures (raised BEFORE any
+/// HTTP response arrived — DNS failure, TCP refused, TLS handshake, etc.).
+ClassMethod TransportHint(url As %String, errText As %String) As %String [ Internal ]
+{
+    If $Extract(url, 1, 8) = "https://" {
+        // Most common cause on IRIS: no SSLConfiguration set on the request.
+        // The %Net error text usually mentions "SSL" or "TLS" when that's it,
+        // but even for generic transport errors on HTTPS, missing SSL config
+        // is the highest-probability first thing to check.
+        Return " Hint: HTTPS calls require an SSL configuration — set 'sslConfig' in your %Embedding.Config JSON to the name of a Security.SSLConfigs entry (create one via Management Portal → System Administration → Security → SSL/TLS Configurations, or ##class(Security.SSLConfigs).Create(""OmniHTTPS"") in %SYS)."
+    }
+    Return " Hint: verify network reachability (DNS, firewall, proxy) between IRIS and the URL above."
 }
 
 /// Returns 1 for statuses that must NOT be retried: any 4xx other than 429.

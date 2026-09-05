@@ -135,6 +135,78 @@ Method TestBreakerStillOpenWithinCooldown()
     Do $$$AssertTrue(##class(dc.omniEmbedding.Engine).CheckBreaker(..#BREAKERKEY), "within cooldown: still open")
 }
 
+// --- Enriched error messages: StatusHint / TransportHint ---
+
+Method TestStatusHint401MentionsCredentialName()
+{
+    Set config = ##class(%DynamicObject).%FromJSON("{""apiKey"":""azure-openai""}")
+    Set hint = ##class(dc.omniEmbedding.provider.Base).StatusHint(401, config)
+    Do $$$AssertTrue($Find(hint, "azure-openai") > 0, "401 hint names the credential: "_hint)
+    Do $$$AssertTrue($Find(hint, "Ens.Config.Credentials") > 0, "401 hint tells caller where to check")
+    Do $$$AssertTrue($Find(hint, "regenerate") > 0, "401 hint suggests regeneration")
+}
+
+Method TestStatusHint403MentionsPermission()
+{
+    Set config = ##class(%DynamicObject).%FromJSON("{""apiKey"":""prod-key""}")
+    Set hint = ##class(dc.omniEmbedding.provider.Base).StatusHint(403, config)
+    Do $$$AssertTrue($Find(hint, "prod-key") > 0, "403 hint names the credential")
+    Do $$$AssertTrue($Find(hint, "permission") > 0, "403 hint mentions permission")
+}
+
+Method TestStatusHint404MentionsModelAndDeployment()
+{
+    Set hint = ##class(dc.omniEmbedding.provider.Base).StatusHint(404, ##class(%DynamicObject).%FromJSON("{}"))
+    Do $$$AssertTrue($Find(hint, "modelName") > 0, "404 hint mentions modelName")
+    Do $$$AssertTrue($Find(hint, "deployment") > 0, "404 hint mentions Azure deployment concept")
+}
+
+Method TestStatusHint429MentionsRetryAfter()
+{
+    Set hint = ##class(dc.omniEmbedding.provider.Base).StatusHint(429, ##class(%DynamicObject).%FromJSON("{}"))
+    Do $$$AssertTrue($Find(hint, "Retry-After") > 0, "429 hint mentions Retry-After")
+    Do $$$AssertTrue($Find(hint, "maxAttempts") > 0, "429 hint mentions retry config")
+}
+
+Method TestStatusHint5xxMentionsUpstream()
+{
+    For status = 500, 502, 503, 504 {
+        Set hint = ##class(dc.omniEmbedding.provider.Base).StatusHint(status, ##class(%DynamicObject).%FromJSON("{}"))
+        Do $$$AssertTrue($Find(hint, "upstream") > 0, "5xx hint for "_status_" mentions upstream")
+    }
+}
+
+Method TestStatusHintUnknownStatusIsEmpty()
+{
+    Set hint = ##class(dc.omniEmbedding.provider.Base).StatusHint(418, ##class(%DynamicObject).%FromJSON("{}"))
+    Do $$$AssertEquals(hint, "", "unknown status yields empty hint (no misleading advice)")
+}
+
+Method TestStatusHintDoesNotLeakCredentialValue()
+{
+    // Register a credential, ensure the hint never contains the VALUE — only the NAME
+    Set ^||omniEmbeddingCredential("secret-name") = "SUPER-SECRET-VALUE-XYZ"
+    Set config = ##class(%DynamicObject).%FromJSON("{""apiKey"":""secret-name""}")
+    Set hint = ##class(dc.omniEmbedding.provider.Base).StatusHint(401, config)
+    Do $$$AssertTrue($Find(hint, "secret-name") > 0, "hint names the credential")
+    Do $$$AssertEquals($Find(hint, "SUPER-SECRET-VALUE-XYZ"), 0, "hint MUST NOT contain the credential value")
+    Kill ^||omniEmbeddingCredential("secret-name")
+}
+
+Method TestTransportHintOnHttpsMentionsSslConfig()
+{
+    Set hint = ##class(dc.omniEmbedding.provider.Base).TransportHint("https://api.example.com/v1/x", "SSL error")
+    Do $$$AssertTrue($Find(hint, "sslConfig") > 0, "HTTPS transport hint suggests 'sslConfig' field")
+    Do $$$AssertTrue($Find(hint, "Security.SSLConfigs") > 0, "hint mentions the IRIS class to create SSL config")
+}
+
+Method TestTransportHintOnHttpMentionsNetwork()
+{
+    Set hint = ##class(dc.omniEmbedding.provider.Base).TransportHint("http://localhost:11434/x", "connect failed")
+    Do $$$AssertTrue($Find(hint, "network") > 0, "HTTP transport hint mentions network reachability")
+    Do $$$AssertEquals($Find(hint, "sslConfig"), 0, "no misleading SSL suggestion on plain HTTP URL")
+}
+
 // --- Property 14: RecordSuccess resets to $LISTBUILD(0, 0) ---
 
 Method TestRecordSuccessResetsState()
