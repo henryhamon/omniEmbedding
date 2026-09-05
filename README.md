@@ -4,6 +4,8 @@
 [![ObjectScript](https://img.shields.io/badge/ObjectScript-native-informational.svg)](https://docs.intersystems.com/)
 [![Embedded Python](https://img.shields.io/badge/Embedded%20Python-optional-yellow.svg)](https://docs.intersystems.com/)
 
+![OmniEmbedding Logo](./assets/omni-logo.png)
+
 # 🧠 dc.omniEmbedding
 
 **The Universal Embedding Gateway for InterSystems IRIS**
