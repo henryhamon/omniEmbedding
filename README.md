@@ -25,6 +25,8 @@ InterSystems IRIS 2026 ships a native embeddings runtime — `%Embedding.Interfa
 - **Mistral** is OpenAI-shaped but adds `output_dimension` / `output_dtype` for Codestral truncation
 - **Voyage AI** adds `input_type` (`query` vs `document`), truncation and int8/binary quantization
 - **Jina AI** requires `input` as an array (even for one text) and exposes `task` + `late_chunking` for coherent long-doc chunks
+- **AWS Bedrock** speaks SigV4 (not Bearer) and switches payload/response shape per family (`amazon.titan-embed-*` vs `cohere.embed-*` hosted on Bedrock)
+- **Google Vertex AI** needs region + project in the URL and an OAuth 2.0 access token in the header — the same `text-embedding-*` family name as OpenAI lives here too
 
 Swapping providers usually means rewriting glue code, and mixing them in fallback flows silently mixes vector spaces — a data-integrity disaster that only surfaces months later, when your similarity searches start returning nonsense.
 
@@ -32,7 +34,7 @@ Swapping providers usually means rewriting glue code, and mixing them in fallbac
 
 Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')` call — from SQL, from ObjectScript, from Interoperability — routes to the right provider, retries transient errors, opens a circuit breaker on failing providers, and **refuses** to fall back to a config whose vector space differs from the primary.
 
-- ✅ **Eight providers, one interface:** Ollama · OpenAI · Azure OpenAI · Cohere · Gemini · Mistral (text + code) · Voyage (text + code + domain) · Jina (with `late_chunking`)
+- ✅ **Ten providers, one interface:** Ollama · OpenAI · Azure OpenAI · Cohere · Gemini · Mistral (text + code) · Voyage (text + code + domain) · Jina (with `late_chunking`) · AWS Bedrock (SigV4, Titan + Cohere via Bedrock) · Google Vertex AI (text-embedding + gemini-embedding)
 - ✅ **Native HTTP:** `%Net.HttpRequest` — no Python required on the hot path
 - ✅ **Resilient:** exponential backoff, `Retry-After` honored, circuit breaker per provider
 - ✅ **Safe fallback:** vector-space invariance is enforced *before* any HTTP call
@@ -43,7 +45,7 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
 
 ## 🛠️ How It Works
 
-`dc.omniEmbedding` sits between IRIS's native embedding runtime and any of the eight supported external providers, applying three architectural pillars:
+`dc.omniEmbedding` sits between IRIS's native embedding runtime and any of the ten supported external providers, applying three architectural pillars:
 
 1. **HTTP native first** — the happy path uses `%Net.HttpRequest` end-to-end; Embedded Python is opt-in only (for accurate `tiktoken` token counts).
 2. **Polymorphism by class hierarchy** — a Template Method in `provider.Base` fixes the sequence `ValidateConfig → SetAuth → GetEmbeddingsUrl → BuildPayload → RetryWithBackoff → ParseResponse`; each provider overrides only what differs.
@@ -65,6 +67,9 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
 | `dc.omniEmbedding.provider.Mistral` | `api.mistral.ai/v1/embeddings`, text (`mistral-embed`) + code (`codestral-embed`), optional `output_dimension` / `output_dtype` |
 | `dc.omniEmbedding.provider.Voyage` | `api.voyageai.com/v1/embeddings`, text (`voyage-3*`) + code (`voyage-code-3`) + domain (`voyage-finance-2`, `voyage-law-2`, `voyage-multilingual-2`); `input_type` (`query`/`document`), `truncation`, `output_dimension`, `output_dtype` |
 | `dc.omniEmbedding.provider.Jina` | `api.jina.ai/v1/embeddings`, `jina-embeddings-v3` and `jina-*` variants; `input` wrapped as array; `task`, `dimensions`, `late_chunking`, `embedding_type` |
+| `dc.omniEmbedding.provider.Bedrock` | `bedrock-runtime.{region}.amazonaws.com/model/{modelId}/invoke`; **SigV4** auth via `util.SigV4`; families `amazon.titan-embed-*` (`inputText`/`normalize`, response `.embedding`) and `cohere.embed-*` on Bedrock (`texts[]`/`input_type`, response `.embeddings[0]`); optional `sessionTokenCredential` for STS/AssumeRole |
+| `dc.omniEmbedding.util.SigV4` | AWS Signature V4 signer, isolated + testable; key derivation matches AWS's official test vector byte-for-byte |
+| `dc.omniEmbedding.provider.VertexAi` | `{region}-aiplatform.googleapis.com/.../models/{model}:predict`; `Bearer` OAuth 2.0 token; payload `instances[{content, task_type?, title?}]` + optional `parameters{outputDimensionality, autoTruncate}`; response `predictions[0].embeddings.values` |
 
 ### **Architecture Overview**
 
@@ -105,7 +110,8 @@ Plug it in once as your `EmbeddingClass` and every `EMBEDDING('text', 'config')`
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │   %Net.HttpRequest → { Ollama | OpenAI | Azure | Cohere |   │
-│                        Gemini | Mistral | Voyage | Jina }   │
+│                        Gemini | Mistral | Voyage | Jina |   │
+│                        Bedrock (SigV4) | VertexAI (OAuth) } │
 └─────────────────────────────────────────────────────────────┘
 
 ```
@@ -192,7 +198,7 @@ Every field is a top-level key on the JSON stored in `%Embedding.Config.Configur
 
 | Field | Required | Description |
 |---|---|---|
-| `provider` | one of: `ollama`, `openai`, `azure`, `cohere`, `gemini`, `mistral`, `voyage`, `jina` (or infer from `modelName`) | Explicit provider selection |
+| `provider` | one of: `ollama`, `openai`, `azure`, `cohere`, `gemini`, `mistral`, `voyage`, `jina`, `bedrock`, `vertex` (aliases: `vertexai`) — or infer from `modelName`. **Bedrock and Vertex do NOT infer** (their model prefixes collide with OpenAI / Cohere / Gemini) | Explicit provider selection |
 | `modelName` | yes | Model identifier for the target provider |
 | `dimensions` | yes | Expected vector length — enforced when checking fallbacks |
 | `apiKey` | provider-dependent | **Credential name** (not the value) — resolved via `Ens.Config.Credentials` |
@@ -213,6 +219,8 @@ Every field is a top-level key on the JSON stored in `%Embedding.Config.Configur
 - **Mistral:** `outputDimension` (truncate — Codestral supports up to 3072), `outputDtype` (`float` · `int8` · `uint8` · `binary` · `ubinary`)
 - **Voyage:** `inputType` (`query` · `document`), `truncation` (bool), `outputDimension`, `outputDtype`
 - **Jina:** `task` (e.g. `retrieval.query` · `retrieval.passage` · `text-matching` · `classification`), `outputDimension` (mapped to Jina's `dimensions`), `lateChunking` (bool — coherent long-doc chunks), `outputDtype` (mapped to Jina's `embedding_type`)
+- **AWS Bedrock:** `region` (required, e.g. `us-east-1`), `sessionTokenCredential` (optional, name of a second credential holding an STS token); `inputType` for Cohere-on-Bedrock family (default `search_document`); `dimensions` for Titan family
+- **Google Vertex AI:** `region` (e.g. `us-central1`) + `project` required; `apiKey` names a credential whose value is a valid OAuth 2.0 access token (rotation is external — service-account JWT auto-refresh is future work); optional `taskType` (`RETRIEVAL_QUERY` · `RETRIEVAL_DOCUMENT` · `SEMANTIC_SIMILARITY` · `CLASSIFICATION` · `CLUSTERING` · `CODE_RETRIEVAL_QUERY`), `title` (only meaningful with `RETRIEVAL_DOCUMENT`), `outputDimension` (mapped to `outputDimensionality`), `autoTruncate` (bool)
 
 ### **Example — Ollama with an OpenAI fallback**
 
@@ -227,6 +235,37 @@ Every field is a top-level key on the JSON stored in `%Embedding.Config.Configur
 ```
 
 An OpenAI config with `text-embedding-3-small` (1536 dims) as a fallback would be **rejected before any HTTP call** — different vector space.
+
+### **Example — AWS Bedrock Titan v2 with a session token**
+
+Register two credentials — the AWS access key/secret pair, and the STS session token — then reference both by name:
+
+```objectscript
+Set cred = ##class(Ens.Config.Credentials).%New()
+Set cred.SystemName = "aws-prod"
+Set cred.Username = "aws"
+Set cred.Password = "AKIA...prod:wJalrXUtnFEMI/K7MDENG..."   ; accessKeyId:secretAccessKey
+Do cred.%Save()
+
+Set tok = ##class(Ens.Config.Credentials).%New()
+Set tok.SystemName = "aws-prod-session"
+Set tok.Username = "sts"
+Set tok.Password = "FQoDYXdz...session-token..."
+Do tok.%Save()
+```
+
+```json
+{
+    "provider": "bedrock",
+    "modelName": "amazon.titan-embed-text-v2:0",
+    "region": "us-east-1",
+    "apiKey": "aws-prod",
+    "sessionTokenCredential": "aws-prod-session",
+    "dimensions": 1024
+}
+```
+
+Bedrock **requires** `provider: "bedrock"` explicit — the gateway will NOT infer it from `cohere.embed-*` or `amazon.titan-embed-*` prefixes to avoid collision with the direct Cohere provider.
 
 ### **Example — Mistral Codestral for code retrieval, truncated to 1024 dims**
 
@@ -278,7 +317,11 @@ dc.omniEmbedding/
 │       ├── Gemini.cls
 │       ├── Mistral.cls              # mistral-embed (text) + codestral-embed (code)
 │       ├── Voyage.cls               # voyage-3, voyage-code-3, voyage-finance-2, ...
-│       └── Jina.cls                 # jina-embeddings-v3, with late_chunking
+│       ├── Jina.cls                 # jina-embeddings-v3, with late_chunking
+│       ├── Bedrock.cls              # Titan + Cohere-via-Bedrock; overrides Execute for SigV4 ordering
+│       └── VertexAi.cls             # text-embedding-* + gemini-embedding-*, OAuth 2.0 Bearer
+├── src/dc/omniEmbedding/util/
+│   └── SigV4.cls                    # AWS Signature V4 signer (isolated, testable)
 ├── tests/dc/omniEmbedding/
 │   ├── TestOpenACompatible.cls    # Payload shape, parse errors, tiktoken floor
 │   ├── TestOllama.cls             # URL construction + end-to-end via Ollama
@@ -288,6 +331,9 @@ dc.omniEmbedding/
 │   ├── TestMistral.cls            # URL, dispatch, output_dimension/dtype passthrough
 │   ├── TestVoyage.cls             # URL, dispatch, inputType enum, all passthroughs
 │   ├── TestJina.cls               # Property 17 — input always array; late_chunking; camelCase→wire mapping
+│   ├── TestSigV4.cls              # Property 18 — key derivation matches AWS official vector byte-for-byte
+│   ├── TestBedrock.cls            # URL, families, ParseResponse per family, credential formats, Property 19 (SigV4 applied), dispatch rules
+│   ├── TestVertexAi.cls           # URL, ValidateConfig, Property 20 (parameters block only when needed), dispatch regression (no prefix inference)
 │   ├── TestResilience.cls         # Properties 11-14 — backoff & breaker
 │   ├── TestFallback.cls           # Properties 4-5 — vector-space invariance
 │   ├── TestSecurity.cls           # Property 15 — credentials never leak
@@ -325,7 +371,7 @@ The end-to-end integration test in `TestOllama` auto-probes `localhost:11434` th
 
 * [x] `%Embedding.Interface` bridge & runtime integration
 * [x] Provider resolution by explicit name or model-prefix inference
-* [x] Eight providers: Ollama, OpenAI, Azure OpenAI, Cohere, Gemini, Mistral (text + code), Voyage (text + code + domain), Jina (with `late_chunking`)
+* [x] Ten providers: Ollama, OpenAI, Azure OpenAI, Cohere, Gemini, Mistral (text + code), Voyage (text + code + domain), Jina (with `late_chunking`), AWS Bedrock (SigV4, Titan + Cohere-on-Bedrock), Google Vertex AI (text-embedding + gemini-embedding)
 * [x] Retry with exponential backoff + `Retry-After` honoring
 * [x] Circuit breaker (5 failures / 60 s cooldown / half-open probe)
 * [x] Fallback with vector-space invariance (fatal on mismatch)
@@ -336,7 +382,8 @@ The end-to-end integration test in `TestOllama` auto-probes `localhost:11434` th
 ### 🔮 **Future**
 
 * [ ] Batching support (multiple inputs per request)
-* [ ] Native support for AWS Bedrock and Vertex AI
+* [ ] Vertex AI: automatic OAuth 2.0 access-token refresh via service-account JWT-bearer flow (currently the token is supplied externally through `Ens.Config.Credentials`)
+* [ ] Optional in-process embedding cache with TTL
 
 ---
 

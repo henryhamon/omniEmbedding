@@ -1161,6 +1161,7 @@ graph TD
     OAC --> MISTRAL["Mistral (v1.0.4)"]
     OAC --> VOYAGE["Voyage (v1.1)"]
     OAC --> JINA["Jina (v1.1)"]
+    BASE --> VERTEX["VertexAi (v1.1)"]
     BEDROCK -.usa.-> SIGV4
 
     OPENAI -->|POST /v1/embeddings| EXT_OPENAI["api.openai.com"]
@@ -1172,6 +1173,7 @@ graph TD
     VOYAGE -->|POST /v1/embeddings| EXT_VOYAGE["api.voyageai.com"]
     JINA -->|POST /v1/embeddings| EXT_JINA["api.jina.ai"]
     BEDROCK -->|POST /model/&#123;id&#125;/invoke SigV4| EXT_BEDROCK["bedrock-runtime.&#123;region&#125;.amazonaws.com"]
+    VERTEX -->|POST /projects/&#123;p&#125;/models/&#123;m&#125;:predict Bearer OAuth| EXT_VERTEX["&#123;region&#125;-aiplatform.googleapis.com"]
 ```
 
 ### Matriz de comportamento por provider
@@ -1187,6 +1189,7 @@ graph TD
 | Cohere | Base | constante `v2/embed` | `texts[]`, `input_type`, `embedding_types` | Bearer | `embeddings.float[0]` (aninhado) |
 | Gemini | Base | com `?key=` (auth na URL) | `content.parts[0].text` | **no-op** (na URL) | `embedding.values` |
 | Bedrock | Base | por region + modelId | por família (Titan / Cohere via Bedrock) | **SigV4** | por família (Titan `.embedding` / Cohere-via-BR `.embeddings[0]`) |
+| VertexAi | Base | por region + project + modelName + `:predict` | `instances[{content, task_type?, title?}]` + `parameters{outputDimensionality?, autoTruncate?}` (block só se necessário) | `Bearer` (OAuth 2.0 access token pré-obtido) | `predictions[0].embeddings.values` |
 
 ### Contrato de `outputDimension` e `outputDtype` (padronização cross-provider)
 
@@ -1213,3 +1216,5 @@ O `modelId` `cohere.embed-english-v3` colide semanticamente com um modelo Cohere
 | ADR-014 | Bedrock exige `provider = "bedrock"` explícito (sem inferência por prefixo) | Prefixo `cohere.embed-*` colide com Cohere direto; ambiguidade eliminada por design |
 | ADR-015 | SigV4 isolado em `util.SigV4` — não em `Base` nem em `Bedrock` | Único caso hoje que precisa; isolamento mantém `Base.RetryWithBackoff` e Providers OpenAI-family sem contaminação; testável independentemente contra os vetores oficiais da AWS |
 | ADR-016 | Credencial Bedrock resolvida como `accessKeyId:secretAccessKey` (ou JSON) sob nome único | Reusa `Ens.Config.Credentials` sem introduzir um segundo store; `sessionToken` (temporário) fica em segundo nome opcional |
+| ADR-017 | Vertex AI exige `provider = "vertex"` ou `"vertexai"` explícito (sem inferência por prefixo) | Prefixo `text-embedding-*` colide com OpenAI e `embedding-*` colide com Gemini direto — ambiguidade eliminada por design |
+| ADR-018 | Vertex AI resolve access token OAuth 2.0 pré-obtido (refresh externo) em v1.1 | Fluxo service account JWT-bearer com RSA signing seria comparável ao SigV4 em complexidade — deixado como escopo futuro para não bloquear entrega; tokens de 1h são práticos para muitos deploys que já têm rotação externa (Vault, GCP Secret Manager, etc.) |

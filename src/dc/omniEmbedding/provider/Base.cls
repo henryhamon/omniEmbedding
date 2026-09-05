@@ -7,10 +7,14 @@ Include %occStatus
 Class dc.omniEmbedding.provider.Base [ Abstract ]
 {
 
-/// Template Method — final, not to be overridden.
+/// Template Method — NOT declared Final. Overrides are reserved for providers
+/// with a legitimate ordering constraint that this sequence cannot express
+/// (currently only Bedrock, which must apply SigV4 AFTER the payload is written
+/// so the signature covers the actual body bytes). All other providers MUST use
+/// this template unchanged.
 /// Sequence: ValidateConfig → SetAuth → GetEmbeddingsUrl → BuildPayload
 ///           → RetryWithBackoff → ParseResponse
-ClassMethod Execute(input As %String, config As %DynamicObject) As %Vector [ Final ]
+ClassMethod Execute(input As %String, config As %DynamicObject) As %Vector
 {
     Do ..ValidateConfig(config)
 

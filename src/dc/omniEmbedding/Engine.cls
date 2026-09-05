@@ -50,14 +50,17 @@ ClassMethod ResolveProvider(config As %DynamicObject) As %String
         If provider = "mistral" { Return "dc.omniEmbedding.provider.Mistral" }
         If provider = "voyage"  { Return "dc.omniEmbedding.provider.Voyage" }
         If provider = "jina"    { Return "dc.omniEmbedding.provider.Jina" }
-        Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: unknown provider '" _ config.%Get("provider") _ "'. Valid: ollama, openai, azure, cohere, gemini, mistral, voyage, jina"
+        If provider = "bedrock" { Return "dc.omniEmbedding.provider.Bedrock" }
+        // Both "vertex" and "vertexai" map to the same class (common typo target).
+        If (provider = "vertex") || (provider = "vertexai") { Return "dc.omniEmbedding.provider.VertexAi" }
+        Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: unknown provider '" _ config.%Get("provider") _ "'. Valid: ollama, openai, azure, cohere, gemini, mistral, voyage, jina, bedrock, vertex"
         $$$ThrowStatus($$$ERROR($$$GeneralError, errMsg))
     }
 
     Set model = $ZConvert(config.%Get("modelName"), "L")
 
     If model = "" {
-        Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: both 'provider' and 'modelName' are absent. Set 'provider' explicitly: ollama, openai, azure, cohere, gemini, mistral, voyage, jina"
+        Set errMsg = "dc.omniEmbedding.Engine.ResolveProvider: both 'provider' and 'modelName' are absent. Set 'provider' explicitly: ollama, openai, azure, cohere, gemini, mistral, voyage, jina, bedrock, vertex"
         $$$ThrowStatus($$$ERROR($$$GeneralError, errMsg))
     }
 

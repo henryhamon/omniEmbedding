@@ -336,3 +336,25 @@ Os requisitos abaixo foram adicionados após a entrega da v1.0. Eles ampliam a l
 8. THE Bedrock.SigV4 SHALL montar o cabeçalho `Authorization: AWS4-HMAC-SHA256 Credential={accessKeyId}/{date}/{region}/bedrock/aws4_request, SignedHeaders={headers}, Signature={hex}`.
 9. THE Bedrock Provider SHALL adicionar os cabeçalhos `x-amz-date` (ISO8601 UTC compact) e, se `sessionToken` presente, `x-amz-security-token`.
 10. THE Bedrock Provider SHALL NUNCA logar `secretAccessKey`, `sessionToken` nem a `Signature` — apenas o `accessKeyId` (identificador público) e o `Credential Scope` podem aparecer em mensagens de erro/diagnóstico.
+
+---
+
+### Requisito 21: Integração com Google Vertex AI (FR-18)
+
+**User Story:** Como arquiteto em uma organização padronizada em Google Cloud, quero consumir os modelos de embedding do Vertex AI (`text-embedding-004`, `text-embedding-005`, `gemini-embedding-001`) — que ficam sob endpoints regionais autenticados por OAuth 2.0 — através do mesmo gateway, mantendo isolamento de credencial e roteamento por projeto/região sem depender de SDKs externos.
+
+#### Critérios de Aceitação
+
+1. WHEN `config.provider = "vertex"` OU `config.provider = "vertexai"` (alias comum), THE Engine SHALL instanciar `dc.omniEmbedding.provider.VertexAi`.
+2. THE Engine SHALL NOT inferir Vertex a partir de prefixo de `modelName` — `text-embedding-*` colide com OpenAI e `embedding-*` colide com Gemini direto. Vertex exige `provider` explícito.
+3. THE VertexAi Provider SHALL construir a URL como `https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/google/models/{modelName}:predict`.
+4. THE VertexAi Provider SHALL adicionar o cabeçalho `Authorization: Bearer {accessToken}`, onde `accessToken` é o valor resolvido via `ResolveApiKey` (o nome da credencial vem de `config.apiKey` e o segredo armazenado é o próprio token OAuth 2.0 válido).
+5. THE VertexAi.BuildPayload SHALL construir `{"instances":[{"content": input}]}` e adicionar campos opcionais no nível da instância:
+   - `task_type` (valores como `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILARITY`, `CLASSIFICATION`, `CLUSTERING`, `CODE_RETRIEVAL_QUERY`) quando `config.taskType` presente
+   - `title` (metadados úteis apenas com `RETRIEVAL_DOCUMENT`) quando `config.title` presente
+6. THE VertexAi.BuildPayload SHALL emitir o bloco `parameters` APENAS quando pelo menos um de `config.outputDimension` OU `config.autoTruncate` estiver presente, mapeando:
+   - `outputDimension` → `outputDimensionality` (inteiro)
+   - `autoTruncate` → `autoTruncate` (booleano)
+7. THE VertexAi.ParseResponse SHALL extrair `body.predictions[0].embeddings.values` → `%Vector`; lançar exceção com o corpo da resposta se qualquer campo do caminho estiver ausente.
+8. THE VertexAi.ValidateConfig SHALL exigir `modelName`, `region`, `project` e `apiKey` não vazios; a ausência de qualquer um lança exceção identificando o campo.
+9. THE VertexAi Provider SHALL delegar refresh do access token OAuth 2.0 ao chamador — o gateway não implementa fluxo de service account JWT-bearer nem uso de metadata server em v1.1. Documentar como escopo futuro se for necessário auto-refresh.

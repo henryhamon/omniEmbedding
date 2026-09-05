@@ -396,8 +396,8 @@ Adicionadas após a v1.0. Cada nova fase é **incremental**: não altera Interfa
 
 ---
 
-- [ ] 12. Fase 11 — AWS Bedrock (SigV4 + payload por família)
-  - [ ] 12.1 Criar `dc.omniEmbedding.util.SigV4` (utilitário isolado)
+- [x] 12. Fase 11 — AWS Bedrock (SigV4 + payload por família)
+  - [x] 12.1 Criar `dc.omniEmbedding.util.SigV4` (utilitário isolado)
     - Criar arquivo `src/dc/omniEmbedding/util/SigV4.cls`
     - Implementar `Sign(request, method, url, region, service, accessKeyId, secretAccessKey, sessionToken, payload)` que retorna o cabeçalho `Authorization` completo e seta `x-amz-date` / `x-amz-security-token`
     - Algoritmo AWS Signature V4 completo:
@@ -409,14 +409,14 @@ Adicionadas após a v1.0. Cada nova fase é **incremental**: não altera Interfa
     - `secretAccessKey`, `sessionToken` e `Signature` NUNCA aparecem em logs ou exceções (Property 15 estendida)
     - _Requisitos: 20.7, 20.8, 20.9, 20.10_
 
-  - [ ]* 12.2 Escrever testes unitários para `dc.omniEmbedding.util.SigV4`
+  - [x]* 12.2 Escrever testes unitários para `dc.omniEmbedding.util.SigV4`
     - Criar arquivo `tests/dc/omniEmbedding/TestSigV4.cls`
     - **Property 18 (novo): assinatura conforme AWS SigV4 test suite** — usar vetores oficiais da AWS (`aws-sig-v4-test-suite`) e verificar canonical request, string to sign e signature byte-a-byte
     - Testar cabeçalhos: `x-amz-date` no formato `YYYYMMDDTHHMMSSZ`; `x-amz-security-token` presente apenas quando `sessionToken` não vazio
     - **Property 15 estendida**: exceção em falha nunca contém `secretAccessKey` nem `Signature`
     - _Requisitos: 20.7, 20.8, 20.9, 20.10_
 
-  - [ ] 12.3 Criar `dc.omniEmbedding.provider.Bedrock`
+  - [x] 12.3 Criar `dc.omniEmbedding.provider.Bedrock`
     - Criar arquivo `src/dc/omniEmbedding/provider/Bedrock.cls`; estende `Base` (NÃO estende `OpenACompatible` — payload e resposta variam por família)
     - Implementar `GetEmbeddingsUrl()`: `"https://bedrock-runtime."_config.region_".amazonaws.com/model/"_config.modelName_"/invoke"`
     - Implementar `SetAuth()`: parsear credencial resolvida (formato `accessKeyId:secretAccessKey` OU JSON `{"accessKeyId":"...","secretAccessKey":"..."}`); se `config.sessionTokenCredential` presente, resolver como segundo lookup; chamar `SigV4.Sign(...)` e aplicar cabeçalhos ao `%Net.HttpRequest`
@@ -430,13 +430,13 @@ Adicionadas após a v1.0. Cada nova fase é **incremental**: não altera Interfa
     - Implementar `ValidateConfig()`: chamar `##super()` + assert `region` e `apiKey` não vazios; assert `modelName` corresponde a família suportada
     - _Requisitos: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6_
 
-  - [ ] 12.4 Adicionar ramo de despacho para Bedrock em `Engine.ResolveProvider`
+  - [x] 12.4 Adicionar ramo de despacho para Bedrock em `Engine.ResolveProvider`
     - Explícito: `provider = "bedrock"` → `dc.omniEmbedding.provider.Bedrock`
     - **Sem inferência por prefixo** — `cohere.embed-*` colide com Cohere direto; exigir `provider = "bedrock"` explícito e documentar no README
     - Atualizar mensagem de "unknown provider" para listar `bedrock`
     - _Requisitos: 20.1_
 
-  - [ ]* 12.5 Escrever testes unitários para `dc.omniEmbedding.provider.Bedrock`
+  - [x]* 12.5 Escrever testes unitários para `dc.omniEmbedding.provider.Bedrock`
     - Criar arquivo `tests/dc/omniEmbedding/TestBedrock.cls`
     - URL composta a partir de region + modelId
     - BuildPayload para Titan (`inputText`/`dimensions`/`normalize`) e para Cohere-via-Bedrock (`texts[]`/`input_type`)
@@ -446,7 +446,45 @@ Adicionadas após a v1.0. Cada nova fase é **incremental**: não altera Interfa
     - Dispatch: explícito funciona; sem prefixo de inferência (validar que `modelName = "cohere.embed-english-v3"` SEM `provider = "bedrock"` continua indo para o Cohere direto, não Bedrock)
     - _Requisitos: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6_
 
-  - [ ] 12.6 Checkpoint — Bedrock funcional
+  - [x] 12.6 Checkpoint — Bedrock funcional
+    - Todos os testes de `TestBedrock` e `TestSigV4` passam
+    - Regressão completa verde
+    - Documentar no README: (a) Bedrock exige `provider = "bedrock"` explícito, (b) formato do valor da credencial (`accessKeyId:secretAccessKey` ou JSON), (c) uso opcional de `sessionTokenCredential` para roles temporárias
+    - Bump de versão em `module.xml`
+
+---
+
+- [x] 13. Fase 12 — Google Vertex AI
+  - [x] 13.1 Criar `dc.omniEmbedding.provider.VertexAi`
+    - Criar arquivo `src/dc/omniEmbedding/provider/VertexAi.cls`; estende `Base` (payload e resposta divergem substancialmente do OpenAI-family e do Gemini direto)
+    - Implementar `GetEmbeddingsUrl()`: `"https://"_region_"-aiplatform.googleapis.com/v1/projects/"_project_"/locations/"_region_"/publishers/google/models/"_modelName_":predict"`
+    - Implementar `SetAuth()`: `Authorization: Bearer {ResolveApiKey(config)}` — o segredo resolvido é o próprio access token OAuth 2.0
+    - Implementar `BuildPayload()`: `{"instances":[{"content": input}]}` com opcionais `task_type`/`title` no nível da instância, e bloco `parameters` (com `outputDimensionality` e `autoTruncate`) emitido APENAS quando pelo menos um deles estiver presente
+    - Implementar `ParseResponse()`: extrair `body.predictions[0].embeddings.values` → `%Vector`; lançar com body dump em cada campo ausente
+    - Implementar `ValidateConfig()`: assert `modelName`, `region`, `project`, `apiKey` não vazios
+    - _Requisitos: 21.1, 21.3, 21.4, 21.5, 21.6, 21.7, 21.8_
+
+  - [x] 13.2 Adicionar ramo de despacho para Vertex em `Engine.ResolveProvider`
+    - Explícito: `provider = "vertex"` OU `provider = "vertexai"` → `dc.omniEmbedding.provider.VertexAi`
+    - **Sem inferência por prefixo** (ADR-017) — `text-embedding-*` colide com OpenAI, `embedding-*` colide com Gemini direto
+    - Atualizar mensagem de "unknown provider" para listar `vertex` entre os válidos
+    - _Requisitos: 21.1, 21.2_
+
+  - [x]* 13.3 Escrever testes unitários para `dc.omniEmbedding.provider.VertexAi`
+    - Criar arquivo `tests/dc/omniEmbedding/TestVertexAi.cls`
+    - URL composta em 2 regiões distintas + modelos distintos
+    - ValidateConfig: cada um dos 4 campos obrigatórios ausente → mensagem identificando o campo
+    - BuildPayload: minimal (só `instances[0].content`), com `taskType`, com `title`+`taskType`, com `outputDimension` só (emite `parameters`), com `autoTruncate` true/false, com todos os extras juntos
+    - **Property 20 (novo): parâmetros só quando necessário** — payload minimal NÃO contém bloco `parameters`
+    - ParseResponse: válido + 4 caminhos de erro (`predictions`, `predictions[0]`, `embeddings`, `values`) — todos com body dump
+    - Auth Bearer via credential hook + rejeição de token vazio
+    - Dispatch: `vertex` explícito, alias `vertexai`, **regressão dupla** — `text-embedding-005` sem provider vai pra OpenAI, `embedding-001` sem provider vai pro Gemini direto (Vertex NÃO ganha por prefixo)
+    - _Requisitos: 21.1, 21.2, 21.3, 21.4, 21.5, 21.6, 21.7, 21.8_
+
+  - [x] 13.4 Checkpoint — Vertex AI funcional
+    - 27 asserts de `TestVertexAi` passam
+    - Regressão completa (15 suites) verde
+    - Documentar no README: Vertex exige `provider = "vertex"` ou `"vertexai"` explícito; `apiKey` armazena o access token OAuth 2.0 diretamente (refresh externo); `region` + `project` obrigatórios; auto-refresh via service account JWT documentado como escopo futuro
     - Todos os testes de `TestBedrock` e `TestSigV4` passam
     - Regressão completa verde
     - Documentar no README: (a) Bedrock exige `provider = "bedrock"` explícito, (b) formato do valor da credencial (`accessKeyId:secretAccessKey` ou JSON), (c) uso opcional de `sessionTokenCredential` para roles temporárias
@@ -481,7 +519,8 @@ Adicionadas após a v1.0. Cada nova fase é **incremental**: não altera Interfa
     { "id": 9, "tasks": ["9.1", "9.2", "9.3", "9.4"] },
     { "id": 10, "tasks": ["10.1", "10.2", "10.3", "10.4"] },
     { "id": 11, "tasks": ["11.1", "11.2", "11.3", "11.4"] },
-    { "id": 12, "tasks": ["12.1", "12.2", "12.3", "12.4", "12.5", "12.6"] }
+    { "id": 12, "tasks": ["12.1", "12.2", "12.3", "12.4", "12.5", "12.6"] },
+    { "id": 13, "tasks": ["13.1", "13.2", "13.3", "13.4"] }
   ]
 }
 ```
