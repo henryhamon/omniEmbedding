@@ -11,9 +11,11 @@ Class dc.omniEmbedding.tests.TestGemini Extends %UnitTest.TestCase
 
 Method TestUrlIncludesModelAndKey()
 {
-    Set config = ##class(%DynamicObject).%FromJSON("{""modelName"":""embedding-001"",""apiKey"":""gk-abc""}")
+    Set ^||omniEmbeddingCredential("gemini-test") = "gk-abc"
+    Set config = ##class(%DynamicObject).%FromJSON("{""modelName"":""embedding-001"",""apiKey"":""gemini-test""}")
     Set url = ##class(dc.omniEmbedding.provider.Gemini).GetEmbeddingsUrl(config)
-    Do $$$AssertEquals(url, "https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=gk-abc", "url embeds model and apiKey")
+    Do $$$AssertEquals(url, "https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=gk-abc", "url embeds model and resolved apiKey")
+    Kill ^||omniEmbeddingCredential("gemini-test")
 }
 
 Method TestUrlThrowsOnEmptyKey()

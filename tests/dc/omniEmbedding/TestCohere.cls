@@ -115,10 +115,12 @@ Method TestValidateMissingModelName()
 
 Method TestSetAuthUsesBearer()
 {
+    Set ^||omniEmbeddingCredential("cohere-test") = "ck-live"
     Set request = ##class(%Net.HttpRequest).%New()
-    Set config = ##class(%DynamicObject).%FromJSON("{""modelName"":""m"",""apiKey"":""ck-live""}")
+    Set config = ##class(%DynamicObject).%FromJSON("{""modelName"":""m"",""apiKey"":""cohere-test""}")
     Do ##class(dc.omniEmbedding.provider.Cohere).SetAuth(request, config)
-    Do $$$AssertEquals(request.Authorization, "Bearer ck-live", "Authorization: Bearer ck-live")
+    Do $$$AssertEquals(request.Authorization, "Bearer ck-live", "Authorization: Bearer <resolved>")
+    Kill ^||omniEmbeddingCredential("cohere-test")
 }
 
 }

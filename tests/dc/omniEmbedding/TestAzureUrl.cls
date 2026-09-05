@@ -56,11 +56,13 @@ Method TestUrlHasExactlyOneDeploymentsSegment()
 
 Method TestSetAuthUsesApiKeyHeader()
 {
+    Set ^||omniEmbeddingCredential("azure-test") = "secret-value"
     Set request = ##class(%Net.HttpRequest).%New()
-    Set config = ##class(%DynamicObject).%FromJSON("{""modelName"":""m"",""apiKey"":""secret-value""}")
+    Set config = ##class(%DynamicObject).%FromJSON("{""modelName"":""m"",""apiKey"":""azure-test""}")
     Do ##class(dc.omniEmbedding.provider.AzureOpenAi).SetAuth(request, config)
-    Do $$$AssertEquals(request.GetHeader("api-key"), "secret-value", "api-key header set")
+    Do $$$AssertEquals(request.GetHeader("api-key"), "secret-value", "api-key header set to resolved value")
     Do $$$AssertEquals(request.Authorization, "", "Authorization header NOT set")
+    Kill ^||omniEmbeddingCredential("azure-test")
 }
 
 Method TestSetAuthRejectsEmptyKey()

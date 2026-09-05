@@ -160,11 +160,33 @@ ClassMethod RetryParam(retry As %DynamicObject, name As %String, default As %Int
 }
 
 /// Resolves the API key.
-/// STUB — Phase 7 replaces with PasswordCredential lookup.
-/// Returns config.apiKey as-is.
+/// config.apiKey is a CREDENTIAL NAME (SystemName), never the value itself.
+/// Looks it up in the namespace's Ens.Config.Credentials store and returns
+/// the Password (the resolved secret).
+/// SECURITY (Property 15): exceptions and traces NEVER include the resolved
+/// value — only the credential name. Callers MUST treat the return value as
+/// secret and never log it.
+/// Returns "" when config.apiKey is absent — providers that require a key
+/// (all except Ollama) enforce non-empty via ValidateConfig / SetAuth.
 ClassMethod ResolveApiKey(config As %DynamicObject) As %String
 {
-    Return config.%Get("apiKey")
+    Set name = config.%Get("apiKey")
+    If name = "" { Return "" }
+
+    // Test hook: process-private override wins over persistent store.
+    // Used by unit tests to inject credentials without touching Ens.Config.Credentials.
+    Set testValue = $Get(^||omniEmbeddingCredential(name))
+    If testValue '= "" { Return testValue }
+
+    If '$$$comClassDefined("Ens.Config.Credentials") {
+        $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding.provider.Base.ResolveApiKey: credential store 'Ens.Config.Credentials' not available in this namespace; cannot resolve credential '"_name_"'"))
+    }
+
+    Set cred = ##class(Ens.Config.Credentials).%OpenId(name, , .sc)
+    If '$IsObject(cred) {
+        $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding.provider.Base.ResolveApiKey: credential '"_name_"' not found"))
+    }
+    Return cred.Password
 }
 
 /// Shared utility: builds a %Vector from a %DynamicArray of floats.
