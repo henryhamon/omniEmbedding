@@ -3,7 +3,7 @@
   <Document name="dc-omni-embedding.ZPM">
     <Module>
       <Name>dc-omni-embedding</Name>
-      <Version>1.0.4</Version>
+      <Version>1.0.5</Version>
       <Description>The Universal Embedding Gateway for InterSystems IRIS</Description>
       <Packaging>module</Packaging>
       <SourcesRoot>src</SourcesRoot>
