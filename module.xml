@@ -3,7 +3,7 @@
   <Document name="dc-omni-embedding.ZPM">
     <Module>
       <Name>dc-omni-embedding</Name>
-      <Version>0.1.3</Version>
+      <Version>0.1.4</Version>
       <Description>Basic InterSystems IRIS Development Template</Description>
       <Packaging>module</Packaging>
       <SourcesRoot>src</SourcesRoot>
