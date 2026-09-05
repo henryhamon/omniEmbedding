@@ -73,24 +73,90 @@ ClassMethod ParseResponse(body As %DynamicObject) As %Vector [ Abstract ]
 {
 }
 
-/// Executes the HTTP POST with a single attempt.
-/// STUB — Phase 5 adds full retry/backoff logic.
-/// Throws on transport error or non-2xx status.
-ClassMethod RetryWithBackoff(request As %Net.HttpRequest, url As %String, config As %DynamicObject) As %Net.HttpResponse [ Private ]
+/// Executes the HTTP POST with retry / exponential backoff.
+/// Retries on 429 and 5xx. Fast-fails on other 4xx. Honors Retry-After when
+/// config.retry.honorRetryAfter is true (default) and the header is present.
+/// Retry parameters (all under config.retry, with defaults):
+///   maxAttempts (3), baseDelayMs (500), maxDelayMs (8000), honorRetryAfter (1)
+/// Throws with the last HTTP status and URL after attempts are exhausted.
+ClassMethod RetryWithBackoff(request As %Net.HttpRequest, url As %String, config As %DynamicObject) As %Net.HttpResponse [ Internal ]
 {
-    Set sc = request.Post(url)
-    If $$$ISERR(sc) {
-        Set errMsg = "dc.omniEmbedding.provider.Base: HTTP transport error for URL: " _ url
-        $$$ThrowStatus($$$ERROR($$$GeneralError, errMsg))
+    Set retry = config.%Get("retry")
+    Set maxAttempts = ..RetryParam(retry, "maxAttempts", 3)
+    Set honorRetryAfter = ..RetryParam(retry, "honorRetryAfter", 1)
+
+    Set attempt = 0, lastStatus = 0, lastBody = ""
+    While attempt < maxAttempts {
+        Set attempt = attempt + 1
+
+        Set sc = request.Post(url)
+        If $$$ISERR(sc) {
+            $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding.provider.Base: HTTP transport error for URL: "_url))
+        }
+
+        Set lastStatus = request.HttpResponse.StatusCode
+
+        // Success: 2xx
+        If (lastStatus >= 200) && (lastStatus < 300) {
+            Return request.HttpResponse
+        }
+
+        Set lastBody = ""
+        Try { Set lastBody = request.HttpResponse.Data.Read(300) } Catch {}
+
+        // Fast-fail on 4xx that are NOT 429
+        If ..IsFastFailStatus(lastStatus) {
+            $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding.provider.Base: HTTP "_lastStatus_" from '"_url_"' (fast-fail, no retry): "_lastBody))
+        }
+
+        // Last attempt: don't sleep, fall through to throw
+        If attempt >= maxAttempts { Quit }
+
+        // 429 or 5xx: compute delay and sleep before next attempt
+        Set retryAfter = ""
+        If honorRetryAfter {
+            Set retryAfter = request.HttpResponse.GetHeader("Retry-After")
+        }
+        Set delayMs = ..ComputeBackoffDelay(attempt, retryAfter, config)
+        If delayMs > 0 { Hang delayMs / 1000 }
     }
-    Set status = request.HttpResponse.StatusCode
-    If (status < 200) || (status >= 300) {
-        Set bodySnip = ""
-        Try { Set bodySnip = request.HttpResponse.Data.Read(300) } Catch {}
-        Set errMsg = "dc.omniEmbedding.provider.Base: HTTP " _ status _ " from '" _ url _ "': " _ bodySnip
-        $$$ThrowStatus($$$ERROR($$$GeneralError, errMsg))
+
+    $$$ThrowStatus($$$ERROR($$$GeneralError, "dc.omniEmbedding.provider.Base: HTTP "_lastStatus_" from '"_url_"' (exhausted "_maxAttempts_" attempts): "_lastBody))
+}
+
+/// Returns 1 for statuses that must NOT be retried: any 4xx other than 429.
+ClassMethod IsFastFailStatus(status As %Integer) As %Boolean
+{
+    Return ((status >= 400) && (status < 500) && (status '= 429))
+}
+
+/// Computes the backoff delay in milliseconds for a given attempt.
+/// When retryAfter is non-empty and numeric, returns retryAfter * 1000 clamped to at least that value.
+/// Otherwise returns MIN(baseDelayMs * 2^(attempt-1) + rand(baseDelayMs), maxDelayMs).
+ClassMethod ComputeBackoffDelay(attempt As %Integer, retryAfter As %String, config As %DynamicObject) As %Integer
+{
+    Set retry = config.%Get("retry")
+    Set baseDelayMs = ..RetryParam(retry, "baseDelayMs", 500)
+    Set maxDelayMs = ..RetryParam(retry, "maxDelayMs", 8000)
+
+    If (retryAfter '= "") && ($Match(retryAfter, "^[0-9]+$")) {
+        Return +retryAfter * 1000
     }
-    Return request.HttpResponse
+
+    Set exp = baseDelayMs * ($ZPower(2, attempt - 1))
+    Set jitter = $Random(baseDelayMs)
+    Set delay = exp + jitter
+    If delay > maxDelayMs { Set delay = maxDelayMs }
+    Return delay
+}
+
+/// Reads a numeric retry parameter from config.retry with a default fallback.
+ClassMethod RetryParam(retry As %DynamicObject, name As %String, default As %Integer) As %Integer [ Private ]
+{
+    If '$IsObject(retry) { Return default }
+    Set v = retry.%Get(name)
+    If (v = "") { Return default }
+    Return +v
 }
 
 /// Resolves the API key.

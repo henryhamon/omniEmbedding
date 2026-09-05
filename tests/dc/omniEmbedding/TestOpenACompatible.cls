@@ -37,8 +37,11 @@ Method TestParseResponseValidResponse()
     Set j = "{""data"":[{""embedding"":[0.1,0.2,0.3],""index"":0,""object"":""embedding""}],""model"":""nomic-embed-text"",""object"":""list""}"
     Set body = ##class(%DynamicObject).%FromJSON(j)
     Set vec = ##class(dc.omniEmbedding.provider.Ollama).ParseResponse(body)
-    Do $$$AssertNotEquals(vec, "", "vector is not empty")
-    Set v1 = $vector(vec, 1, "xf32")
+    Do $$$AssertTrue(##class(%Library.Vector).IsValid(vec), "returned value is a valid %Vector")
+    // $vector(v,i,...) read syntax is opaque on IRIS 2026+ — introspect via %Library.Vector
+    Set disp = ##class(%Library.Vector).LogicalToDisplay(vec)
+    Do $$$AssertEquals($Length(disp, ","), 3, "vector has 3 elements")
+    Set v1 = +$Piece(disp, ",", 1)
     Do $$$AssertTrue((v1 > 0.09) && (v1 < 0.11), "first element approximately 0.1")
 }
 
